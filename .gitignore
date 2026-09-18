@@ -1,0 +1,5 @@
+node_modules/
+dist/
+
+# Regenerable byproduct of `vitest --coverage`. Never committed.
+coverage/

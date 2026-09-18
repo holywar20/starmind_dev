@@ -1,0 +1,24 @@
+{
+  "name": "starmind_dev",
+  "version": "0.1.0",
+  "private": true,
+  "description": "starmind_dev — the internal testing surface as a standalone MCP server. Never ships.",
+  "license": "MIT",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && node build.js",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.11"
+  }
+}

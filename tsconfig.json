@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "lib": ["ES2022"],
+    "strict": true,
+    // `noUncheckedIndexedAccess` WAS SET HERE AND WAS REMOVED when `paths` started reaching into
+    // kcd_sdk. It is not the house setting — no other package in this workspace enables it — so the
+    // flag put this package in the position of type-checking a dependency under rules that dependency
+    // does not compile under, producing a screen of errors in files we neither own nor can fix. A
+    // strictness setting that only fires on someone else's source is not buying strictness.
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    // No outDir/rootDir: tsc never emits here ( typecheck is --noEmit, esbuild does the emit ), and a
+    // rootDir would object to type-checking source that lives outside src/ — which `paths` now does.
+    "noEmit": true,
+    // `paths` points the type-checker at kcd_sdk's SOURCE, the same file build.js aliases to, so the
+    // checker and the bundler can never be reading two different vintages of the SDK. Same arrangement
+    // daedalus uses, for the same reason.
+    //
+    // `@kcd/core` and NOT `@kcd`: core is the Node-free half, and the specifier is the one the renderer
+    // already uses. That matters more than tidiness here — the reason this package can rehydrate an
+    // Agent at all is that the renderer, also out of process, does exactly this. Reaching for the node
+    // barrel would be claiming a capability ( disk ) that the seam does not have.
+    "baseUrl": ".",
+    "paths": {
+      "@kcd/core": ["../kcd_sdk/src/core/index.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
