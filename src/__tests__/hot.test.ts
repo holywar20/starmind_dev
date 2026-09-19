@@ -185,6 +185,70 @@ describe( 'the hot tools', () => {
 		expect( app.asked.map( ( a ) => a.verb ) ).toEqual( [ 'session_store.get', 'agent_store.list', 'agent_store.get', 'mcp_store.tools', 'communication.turns', 'chat_send' ] );
 	} );
 
+	// ── Describing an agent ──────────────────────────────────────────────────────────────────
+
+	const PROMPT = 'You are the tester. '.repeat( 20 );
+
+	/** The tester again, on a real model key, with the roster the picker reads answering for it. The row
+	 *  carries the panel's own fields too, because the real one does and the tool must leave them out. */
+	function onModel(): void {
+		const modeled = { ...tester, model: 'cc.sonnet', systemPrompt: PROMPT };
+		app.verb( 'agent_store.list', () => [ Agent.fromSerialized( modeled as unknown as SerializedAgent ).summarize() ] )
+			.verb( 'agent_store.get', ( id ) => ( id === 'a1' ? modeled : null ) )
+			.pull( 'models', { reads: [ 'roster' ], fn: () => [
+				{ key: 'cc.sonnet', label: 'Sonnet', provider: 'claude_code_max', modelId: 'claude-sonnet-5',
+				  family: { key: 'cc', label: 'Claude ( subscription )' }, status: 'ready', doc: 'THE PANEL DOC', config: {}, visible: true }
+			] } );
+	}
+
+	it( 'lists each agent with its model key and project — the summary carried them all along', async () => {
+		onModel();
+		const body = await json( 'list_sessions' );
+		expect( body[ 'agents' ] ).toEqual( [ { id: 'a1', name: 'Tester', model: 'cc.sonnet', projectId: 'p1' } ] );
+	} );
+
+	it( 'describes an agent\'s model by the provider that serves it, and nothing of the panel\'s row', async () => {
+		onModel();
+		const body = await json( 'describe_agent', { agent: 'Tester' } );
+		expect( body[ 'model' ] ).toEqual( {
+			key: 'cc.sonnet', label: 'Sonnet', provider: 'claude_code_max', modelId: 'claude-sonnet-5', family: 'Claude ( subscription )', status: 'ready'
+		} );
+		expect( JSON.stringify( body ) ).not.toContain( 'THE PANEL DOC' );
+	} );
+
+	it( 'names a model key the roster does not hold, rather than guessing what it meant', async () => {
+		onModel();
+		app.pull( 'models', { reads: [ 'roster' ], fn: () => [] } );
+		const model = ( await json( 'describe_agent', { agent: 'a1' } ) )[ 'model' ] as Record<string, unknown>;
+		expect( model[ 'key' ] ).toBe( 'cc.sonnet' );
+		expect( String( model[ 'unresolved' ] ) ).toContain( 'unknown_model' );
+	} );
+
+	it( 'reports an agent that never dispatches as a null model, without asking the roster', async () => {
+		const body = await json( 'describe_agent', { agent: 'a1' } );
+		expect( body[ 'model' ] ).toBeNull();
+		expect( app.asked.some( ( a ) => a.verb === 'models.roster' ) ).toBe( false );
+	} );
+
+	it( 'carries the tool surface a spawn would send, and previews the prompt rather than transcribing it', async () => {
+		onModel();
+		const body  = await json( 'describe_agent', { agent: 'a1' } );
+		const tools = body[ 'tools' ] as { preloaded: string[]; policies: Record<string, string> };
+		// THE SAME ANSWER `spawn_agent` SENDS AS `toolNames` — computed off the same bound defs. The preload
+		// REQUEST, which the passport narrows at compile; not the wire.
+		expect( tools.preloaded ).toEqual( [ 'srv.grep' ] );
+		expect( tools.policies ).toEqual( { 'srv.grep': 'allow', 'srv.write': 'allow' } );
+
+		const prompt = body[ 'systemPrompt' ] as { chars: number; opening: string };
+		expect( prompt.chars ).toBe( PROMPT.length );
+		expect( prompt.opening ).toBe( PROMPT.slice( 0, 200 ) );
+	} );
+
+	it( 'refuses a near-miss name, by the same exact rule a spawn resolves by', async () => {
+		const near = await refusal( 'describe_agent', { agent: 'tester' } );
+		expect( near ).toContain( 'no agent matches' );
+	} );
+
 	// ── Policy writes ────────────────────────────────────────────────────────────────────────
 
 	it( 'refuses an unknown gate, a bad policy value, and a run with no passport — each differently', async () => {

@@ -217,8 +217,11 @@ interface SessionRef {
  *
  * EXACT NAME MATCHING, never fuzzy: a test that silently ran as the wrong agent is the same class of
  * defect this entire surface exists to stop.
+ *
+ * The matched SUMMARY rides back beside the agent. It was already read to find the match, and it is where
+ * the authored lens paths live — `describe_agent` reports them without a second trip.
  */
-async function resolveAgent( ref: string, tool: string ): Promise<{ agent: Agent } | { refusal: ToolResult }> {
+async function resolveAgent( ref: string, tool: string ): Promise<{ agent: Agent; summary: AgentSummary } | { refusal: ToolResult }> {
 	const listed = await verb( 'agent_store.list', tool );
 	if ( 'refusal' in listed ) return listed;
 
@@ -253,7 +256,41 @@ async function resolveAgent( ref: string, tool: string ): Promise<{ agent: Agent
 	if ( !isOk( defs ) ) return { refusal: refuse( defs, `${ tool } ( binding tool defs )` ) };
 	agent.bindEnv( { toolDefs: ( ( defs.value ?? [] ) as { tools: ToolDef[] }[] ).flatMap( ( s ) => s.tools ?? [] ) } );
 
-	return { agent };
+	return { agent, summary: match };
+}
+
+/** The part of a `models.roster` row that answers "what serves this model". The row carries the Models
+ *  panel's whole join — its doc, its config, its visibility — and none of that is this question. */
+interface ModelRow {
+	key:      string;
+	label:    string;
+	provider: string;
+	modelId:  string;
+	family?:  { key: string; label: string };
+	status?:  unknown;
+}
+
+/** How much of a system prompt `describe_agent` quotes. Enough to recognise it by; the rest is a count. */
+const PROMPT_PREVIEW = 200;
+
+/**
+ * Resolve an agent's model KEY against the roster the picker reads.
+ *
+ * THREE ANSWERS, KEPT APART. `null` is an agent that never dispatches — the vault case, where naming a model
+ * would be a lie. A key the roster does not hold is `unresolved`, stated rather than guessed, because a turn
+ * on that agent fails `unknown_model` before anything is sent and a reader deciding whether to spawn needs to
+ * know that first. Everything else comes back with its provider, which is what says Claude or local.
+ */
+async function describeModel( key: string | null, tool: string ): Promise<{ value: unknown } | { refusal: ToolResult }> {
+	if ( key === null ) return { value: null };
+	const reply = await Door.pull( 'models', 'roster' );
+	if ( !isOk( reply ) ) return { refusal: refuse( reply, `${ tool } ( model roster )` ) };
+
+	const row = ( ( reply.value ?? [] ) as ModelRow[] ).find( ( r ) => r.key === key );
+	if ( !row ) {
+		return { value: { key, unresolved: 'No model with this key is in the roster. A turn on this agent fails `unknown_model` before anything is sent — the key is stale, or names a model not set up on this machine.' } };
+	}
+	return { value: { key, label: row.label, provider: row.provider, modelId: row.modelId, family: row.family?.label ?? null, status: row.status ?? null } };
 }
 
 /**
@@ -647,8 +684,9 @@ export function hotTools(): ToolDefinition[] {
 			annotations: { readOnlyHint: true },
 			description: 'List live sessions and the agents available to spawn. Read this before spawning if you do not already hold an agent id.',
 			doc:
-				'Returns `sessions` ( id, title, agent, status, turn count ) and `agents` ( id, name ), which is ' +
-				'everything the other tools need as input.\n\n' +
+				'Returns `sessions` ( id, title, agent, status, turn count ) and `agents` ( id, name, model key, ' +
+				'project ), which is everything the other tools need as input. `describe_agent` reads one agent whole, ' +
+				'including which provider serves its model.\n\n' +
 				'Live registry state, not history — a session that ended is not here.',
 			inputSchema: { type: 'object', properties: {}, required: [] },
 			handler:     async () => {
@@ -675,7 +713,61 @@ export function hotTools(): ToolDefinition[] {
 						// the authority that actually knows.
 						turns:     s.turnCount ?? null
 					} ) ),
-					agents: agents.map( ( a ) => ( { id: a.id, name: a.name } ) )
+					// THE SUMMARY ALREADY CARRIES THE MODEL. This used to keep `id` and `name` alone, which left a run
+					// unable to tell a Claude agent from a local one while the app was answering the question.
+					agents: agents.map( ( a ) => ( { id: a.id, name: a.name, model: a.model, projectId: a.projectId } ) )
+				} );
+			}
+		},
+
+		{
+			name:        'describe_agent',
+			annotations: { readOnlyHint: true },
+			description: 'Read one agent whole — its model and the provider serving it, its lenses, its system prompt, and the tool surface a turn on it would carry.',
+			doc:
+				'The question to ask BEFORE spawning, and the one `list_sessions` only half answers. `agent` takes an id ' +
+				'or EXACT name — the rule `spawn_agent` resolves by, so what this describes is what a spawn would run.\n\n' +
+				'`model.provider` answers "is this Claude or a local model": `anthropic` and `claude_code_max` are Claude, ' +
+				'`local` and `remote` are served endpoints, `test` is the scripted brain. A key the roster does not hold ' +
+				'comes back `unresolved` rather than guessed, and `model: null` is an agent that never dispatches.\n\n' +
+				'`tools.preloaded` is exactly the `toolNames` `spawn_agent` would send — computed the same way, off the ' +
+				'same bound defs, which are the WHOLE served roster ( the renderer binds the same way ). It is the preload ' +
+				'REQUEST, not the wire: the run\'s passport narrows it to what the run holds when the turn compiles, so it ' +
+				'can name tools `tools.policies` does not grant. What one RUN actually carries is a per-session question — ' +
+				'`Environment.roster` answers it app-side, and no door verb reaches it yet.\n\n' +
+				'The system prompt is PREVIEWED, not transcribed: its length and its opening. `null` means none is set; ' +
+				'zero characters is one deliberately left empty.',
+			inputSchema: {
+				type:       'object',
+				properties: {
+					agent: { type: 'string', description: 'Agent id, or the agent\'s exact name.' }
+				},
+				required: [ 'agent' ]
+			},
+			handler: async ( args ) => {
+				const ref = String( args[ 'agent' ] ?? '' );
+				if ( !ref ) return fail( 'describe_agent needs an "agent" — an agent id or exact name. Call list_sessions to see them.' );
+
+				const resolved = await resolveAgent( ref, 'describe_agent' );
+				if ( 'refusal' in resolved ) return resolved.refusal;
+				const { agent, summary } = resolved;
+
+				const model = await describeModel( agent.model, 'describe_agent' );
+				if ( 'refusal' in model ) return model.refusal;
+
+				const prompt = agent.systemPrompt;
+				return ok( {
+					id:           agent.id,
+					name:         agent.name,
+					projectId:    agent.projectId,
+					model:        model.value,
+					lenses:       summary.lensPaths,
+					systemPrompt: prompt === null ? null : { chars: prompt.length, opening: prompt.slice( 0, PROMPT_PREVIEW ) },
+					tools: {
+						policies:  agent.toolPolicies,
+						surfaces:  agent.toolSurfaces,
+						preloaded: agent.preloadedToolIds()
+					}
 				} );
 			}
 		},
