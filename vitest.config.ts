@@ -7,8 +7,7 @@ import { resolve } from 'path';
  * The `alias` is the third place `@kcd/core` is pointed at kcd_sdk's source — beside tsconfig `paths`
  * for the checker and build.js for the bundler. Three declarations of one fact is one too many and is
  * noted rather than tidied: collapsing them needs a shared config module, which is a change to the
- * daedalus-derived build shape rather than to this file, and doing it here would leave that shape
- * inconsistent across two packages instead of one.
+ * build shape rather than to this file.
  */
 export default defineConfig( {
 	resolve: {

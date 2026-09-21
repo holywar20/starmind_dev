@@ -5,6 +5,7 @@ import { Agent, type AgentSummary, type SerializedAgent, type ToolDef } from '@k
 import { Door, isOk, unreached, type DoorReply } from '../Door';
 import type { ToolDefinition, ToolResult } from '../mcp';
 import { testbedTools } from './testbed';
+import { driveTools } from './drive';
 
 /** How long a wait runs before giving up, and how often it looks. The default sits just under the usual
  *  180s MCP client timeout, because a wait that outlives its caller reports its answer to nobody. One
@@ -122,9 +123,11 @@ async function verb( name: string, tool: string, ...args: unknown[] ): Promise<{
  * ── AN UNNARROWED REPLY OVER THE CEILING IS WITHHELD ────────────────────────────────────────────
  *
  * Omit `fields` and the value is transcribed whole — up to `REPLY_CEILING`. Past it the value is left out
- * and `withheld` says why, beside the `bytes` and `keys` a narrow call needs. A client handed a reply that
- * size closes the connection, and a closed connection reads as a dead server rather than as a question
- * asked too wide. A call that names `fields` has said what it wants and is transcribed as asked.
+ * and `withheld` says why, beside the `bytes` and `keys` a narrow call needs. A client fails a wide reply
+ * TWICE OVER: past its inline limit it spills the reply to a file the caller must go and search, and far
+ * past that it closes the connection, which reads as a dead server rather than as a question asked too
+ * wide. The ceiling sits under the FIRST, so neither is reached ( bug-report-20 ). A call that names
+ * `fields` has said what it wants and is transcribed as asked.
  *
  * ── SIZE RIDES WHETHER OR NOT ANYONE ASKED FOR IT ───────────────────────────────────────────────
  *
@@ -140,7 +143,8 @@ async function verb( name: string, tool: string, ...args: unknown[] ): Promise<{
  */
 interface Projection {
 	value:   unknown;
-	/** Size of the WHOLE value as JSON, before any projection. Always present. */
+	/** Size of the WHOLE value as the door transcribes it, before any projection — in characters despite the
+	 *  name, because characters are what a context pays for. Always present. */
 	bytes:   number;
 	/** Every top-level field that was available, read off the first row of a list. */
 	keys:    string[] | undefined;
@@ -150,11 +154,42 @@ interface Projection {
 	withheld: string | undefined;
 }
 
-/** The largest unnarrowed reply the door transcribes, in bytes of JSON. */
-const REPLY_CEILING = 256 * 1024;
+/** The largest unnarrowed reply the door transcribes, in characters as transcribed. Set against the client's
+ *  INLINE limit ( 25k tokens by default; replies of 92,974 and 99,305 characters were refused ), with margin
+ *  for JSON that tokenizes densely. */
+const REPLY_CEILING = 60_000;
+
+/** The ceiling as every doc on this surface states it, built from the number so the prose cannot drift from it. */
+const CEILING_TEXT = `${ REPLY_CEILING.toLocaleString( 'en-US' ) } characters as transcribed`;
+
+/**
+ * The diagnostic INDEX of the surface — every command by name, lane and description, its schema left out.
+ *
+ * A schema is an authoring fact that `describe_surface` serves by address, and the commands' schemas were most
+ * of this reply — enough that it arrived past what a client carries inline ( bug-report-20 ). The reply says
+ * what it dropped and where to get it, because a short list that reads as complete is worse than a long one.
+ * Read FRESH on every call, never through `Surface`'s cache: `served` is worth reading only because it is live.
+ */
+function verbIndex( value: unknown ): unknown {
+	if ( !value || typeof value !== 'object' ) return value;
+	const whole = value as Record<string, unknown>;
+	if ( !Array.isArray( whole[ 'commands' ] ) ) return value;
+	return {
+		...whole,
+		commands: ( whole[ 'commands' ] as Record<string, unknown>[] ).map( withoutSchema ),
+		schemas:  'Omitted from every command here. describe_surface { address: "emit:<name>" } returns one in full.'
+	};
+}
+
+function withoutSchema( command: Record<string, unknown> ): Record<string, unknown> {
+	const { schema: _schema, ...rest } = command;
+	return rest;
+}
 
 function project( value: unknown, fields: unknown ): Projection {
-	const bytes = JSON.stringify( value ?? null )?.length ?? 0;
+	// AS TRANSCRIBED, not compacted: `ok()` indents, and indentation nearly doubles a real reply. Read off the
+	// compact form, the ceiling passed replies the client then refused.
+	const bytes = JSON.stringify( value ?? null, null, 2 )?.length ?? 0;
 	const names = Array.isArray( fields ) ? fields.filter( ( f ): f is string => typeof f === 'string' ) : [];
 
 	// The shape on offer, read off the FIRST ROW of a list: every fat read on this lane answers with a
@@ -166,7 +201,7 @@ function project( value: unknown, fields: unknown ): Projection {
 		const ask = keys
 			? 'Pass `fields` naming what you need from `keys`.'
 			: 'It has no fields to narrow by — reach the part you need through a narrower op.';
-		return { value: undefined, bytes, keys, missing: undefined, withheld: `Not transcribed: ${ bytes } bytes is over the ${ REPLY_CEILING }-byte ceiling for a reply that names no fields. ${ ask }` };
+		return { value: undefined, bytes, keys, missing: undefined, withheld: `Not transcribed: ${ bytes } characters as transcribed is over the ${ REPLY_CEILING }-character ceiling for a reply that names no fields. ${ ask }` };
 	}
 	if ( !names.length ) return { value, bytes, keys, missing: undefined, withheld: undefined };
 
@@ -193,7 +228,7 @@ function project( value: unknown, fields: unknown ): Projection {
 const FIELDS_PARAM = {
 	type:        'array',
 	items:       { type: 'string' },
-	description: 'Optional top-level field names to keep. The reply is projected down to these before it is written out — the channel is unaffected. Omit it and the whole value is transcribed unless it is over 256 KB, when it is withheld with a `withheld` note. `bytes` always reports the size of the WHOLE value and `keys` names every field that was available, so one wide call teaches the narrow one.'
+	description: 'Optional top-level field names to keep. The reply is projected down to these before it is written out — the channel is unaffected. Omit it and the whole value is transcribed unless it is over ' + CEILING_TEXT + ', when it is withheld with a `withheld` note. `bytes` always reports the size of the WHOLE value and `keys` names every field that was available, so one wide call teaches the narrow one.'
 } as const;
 
 /** The fields this surface reads off a session row. Named locally rather than importing the SDK's
@@ -472,12 +507,15 @@ export function hotTools(): ToolDefinition[] {
 				'serving no bus channel lives. `armed: false` means declared but not serving in this run, which is a ' +
 				'different fact from not being declared at all. `reads` are callable through `read_state` and `writes` ' +
 				'through `write_state`; both are listed because the SPLIT is the finding — which lane an op sits on ' +
-				'decides which tool reaches it, and the two halves are not the same size.',
+				'decides which tool reaches it, and the two halves are not the same size.\n\n' +
+				'NO SCHEMAS. A command is listed by name, lane and description; its full JSON Schema is ' +
+				'`describe_surface { address: "emit:<name>" }`. This is the diagnostic view, and every command\'s ' +
+				'schema in one reply was more than a client carries inline.',
 			inputSchema: { type: 'object', properties: {}, required: [] },
 			handler:     async () => {
 				const reply = await Door.verbs();
 				if ( !isOk( reply ) ) return refuse( reply, 'list_verbs' );
-				return ok( reply.value );
+				return ok( verbIndex( reply.value ) );
 			}
 		},
 
@@ -544,9 +582,9 @@ export function hotTools(): ToolDefinition[] {
 				'SO PASS `fields`. `read_state { channel: "models", op: "roster", fields: [ "key", "label", "tier", ' +
 				'"status" ] }` answers that question for a rounding error. The projection happens HERE, after the ' +
 				'door has answered: the channel is untouched and the renderer is unaffected.\n\n' +
-				'A REPLY THAT NAMES NO FIELDS IS CAPPED AT 256 KB. Over it, `value` is left out and `withheld` says ' +
-				'so, beside `bytes` and `keys` — a reply that size closes the MCP connection, which reads as a dead ' +
-				'server. Name the fields you need and the reply is transcribed as asked.\n\n' +
+				'A REPLY THAT NAMES NO FIELDS IS CAPPED AT ' + CEILING_TEXT + '. Over it, `value` is left out and `withheld` says ' +
+				'so, beside `bytes` and `keys` — past it a client spills the reply to a file, and far past it closes the ' +
+				'connection. Name the fields you need and the reply is transcribed as asked.\n\n' +
 				'`bytes` AND `keys` RIDE ON EVERY REPLY, including an unprojected one. `bytes` is the size of the ' +
 				'WHOLE value whatever you kept, and `keys` names every field that was on offer — so one wide call ' +
 				'teaches you the narrow one. A field you name that no row serves comes back under `missing` rather ' +
@@ -609,7 +647,7 @@ export function hotTools(): ToolDefinition[] {
 				'is not going to change. Measured at ~1MB / 2,900 lines by a caller that wanted one id.\n\n' +
 				'SO PASS `fields`. `write_state { channel: "agent_store", op: "create", args: { … }, fields: [ "id", ' +
 				'"name" ] }` performs exactly the same write and transcribes two strings. `bytes` still reports what ' +
-				'the write actually returned, so you learn the cost without paying it twice. A product over 256 KB ' +
+				'the write actually returned, so you learn the cost without paying it twice. A product over ' + CEILING_TEXT + ' ' +
 				'with no `fields` is withheld rather than transcribed — and the write has still happened.',
 			inputSchema: {
 				type:       'object',
@@ -723,7 +761,7 @@ export function hotTools(): ToolDefinition[] {
 		{
 			name:        'describe_agent',
 			annotations: { readOnlyHint: true },
-			description: 'Read one agent whole — its model and the provider serving it, its lenses, its system prompt, and the tool surface a turn on it would carry.',
+			description: 'Read one agent whole — its model and the provider serving it, its lenses, its system prompt, and the tools it is CONFIGURED with. For what one run would actually carry, see the doc.',
 			doc:
 				'The question to ask BEFORE spawning, and the one `list_sessions` only half answers. `agent` takes an id ' +
 				'or EXACT name — the rule `spawn_agent` resolves by, so what this describes is what a spawn would run.\n\n' +
@@ -734,7 +772,11 @@ export function hotTools(): ToolDefinition[] {
 				'same bound defs, which are the WHOLE served roster ( the renderer binds the same way ). It is the preload ' +
 				'REQUEST, not the wire: the run\'s passport narrows it to what the run holds when the turn compiles, so it ' +
 				'can name tools `tools.policies` does not grant. What one RUN actually carries is a per-session question — ' +
-				'`Environment.roster` answers it app-side, and no door verb reaches it yet.\n\n' +
+				'and THIS TOOL IS THE WRONG PLACE TO ASK IT. Read it with `read_state { channel: "capability", op: "now", ' +
+				'args: { sessionId } }`, which composes the answer through the same doors a send uses — a compile reads ' +
+				'its own roster from there rather than repeating it. The three answers differ ON PURPOSE and the gap ' +
+				'between them is diagnostic: `policies` is what the agent DOCUMENT allows, `preloaded` is what a spawn ' +
+				'would REQUEST, and `capability/now` is what this run would be HANDED if it sent now.\n\n' +
 				'The system prompt is PREVIEWED, not transcribed: its length and its opening. `null` means none is set; ' +
 				'zero characters is one deliberately left empty.',
 			inputSchema: {
@@ -1375,6 +1417,9 @@ export function hotTools(): ToolDefinition[] {
 				return ok( { ...( reply.value as Record<string, unknown> ), confirmWith: 'dev_status — a reply here means the quit was scheduled, nothing more.' } );
 			}
 		},
+
+		// The four DRIVE verbs. Their own file, listed here so a reload picks them up.
+		...driveTools(),
 
 		// The taskboard test bed's down / up / report. Their own file, listed here so a reload picks them up.
 		...testbedTools()

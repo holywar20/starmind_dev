@@ -16,8 +16,7 @@
     // rootDir would object to type-checking source that lives outside src/ — which `paths` now does.
     "noEmit": true,
     // `paths` points the type-checker at kcd_sdk's SOURCE, the same file build.js aliases to, so the
-    // checker and the bundler can never be reading two different vintages of the SDK. Same arrangement
-    // daedalus uses, for the same reason.
+    // checker and the bundler can never be reading two different vintages of the SDK.
     //
     // `@kcd/core` and NOT `@kcd`: core is the Node-free half, and the specifier is the one the renderer
     // already uses. That matters more than tidiness here — the reason this package can rehydrate an

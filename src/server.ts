@@ -17,8 +17,8 @@ import { fluentTools } from './tools/fluent';
  * tool on it, including the ones that only read, was unavailable whenever Starmind was down, which
  * is precisely when a cold suite, a CI run, or a first-boot check would want them.
  *
- * So the dependency is inverted. This is a server, modelled on daedalus, that reaches INTO the
- * application when the application happens to be running, and does useful work when it is not.
+ * So the dependency is inverted. This is a standalone server that reaches INTO the application
+ * when the application happens to be running, and does useful work when it is not.
  *
  * ── TWO CLASSES OF TOOL ─────────────────────────────────────────────────────────────────────────
  *
@@ -53,8 +53,8 @@ import { fluentTools } from './tools/fluent';
  *
  * ── NO BASE CLASS ───────────────────────────────────────────────────────────────────────────────
  *
- * Same reasoning daedalus recorded: this project will only ever possess THIS ONE server, so an
- * abstract base would exist to serve a plurality it does not have. The wire stays its own module
+ * This project will only ever possess THIS ONE server, so an abstract base would exist to serve a
+ * plurality it does not have. The wire stays its own module
  * because that genuinely is a separate concern.
  */
 export class StarmindDevServer {

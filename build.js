@@ -1,8 +1,6 @@
 /**
  * Build script — esbuild bundles the server into one self-contained file under dist/.
  *
- * Modelled on daedalus's, minus the CLI face it does not have.
- *
  * ── ONE ALIAS, AND IT WAS ADDED KNOWINGLY ───────────────────────────────────────────────────────
  *
  * This file used to say that resolving NOTHING outside the package was the property worth protecting

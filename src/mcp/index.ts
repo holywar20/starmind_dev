@@ -1,15 +1,14 @@
 /**
- * The vendored MCP wire — starmind_dev's own copy of the server substrate, taken from
- * `daedalus/src/mcp/` on 2026-08-23, which took it from `kcd_sdk/src/server/` on 2026-07-22.
+ * The vendored MCP wire — starmind_dev's own copy of the server substrate in
+ * `kcd_sdk/src/server/`.
  *
- * WHY A THIRD COPY RATHER THAN AN IMPORT. This is duplication and it is deliberate. daedalus
- * is its own repository with its own remote and its own release cadence; starmind_dev is a
+ * WHY A COPY RATHER THAN AN IMPORT. This is duplication and it is deliberate. starmind_dev is a
  * TEST rig, and a test rig that stops working because a product component refactored is a
  * test rig that fails exactly when something is being changed — which is the only time it
  * matters. Protocol code is also the cheapest possible thing to duplicate: it implements a
  * published spec, so it changes when the spec changes and not when this project does.
  *
- * Divergence from either original is expected, not a defect. Read `./McpServer.ts`'s header
+ * Divergence from the original is expected, not a defect. Read `./McpServer.ts`'s header
  * before changing anything here.
  *
  * NOT VENDORED, and each omission is load-bearing:

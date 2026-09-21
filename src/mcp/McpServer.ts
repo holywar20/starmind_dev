@@ -1,26 +1,20 @@
 /**
  * ══ VENDORED ═════════════════════════════════════════════════════════════════
  *
- * Copied verbatim from `kcd_sdk/src/server/McpServer.ts` on 2026-07-22, during the
- * Daedalus extraction. This is a DELIBERATE COPY, not a shared import, and the two
- * are expected to diverge. Do not attempt to re-unify them.
- *
- * WHY A COPY. Daedalus is its own project — a context compiler that ships as a
- * standalone kit — and Starmind uses Daedalus, never the reverse. A shared module
- * would be an import edge pointing from the published tool back into the
- * application it is being extracted from, across what is about to become two
- * separate repositories. The copy is 248 lines with zero external dependencies;
- * the abstraction that would avoid it costs more than the duplication does.
+ * Copied from `kcd_sdk/src/server/McpServer.ts`. This is a DELIBERATE COPY, not a
+ * shared import, and the two are expected to diverge. Do not attempt to re-unify
+ * them — `./index.ts` says why a test rig keeps its own wire. The copy has zero
+ * external dependencies; the abstraction that would avoid it costs more than the
+ * duplication does.
  *
  * WHY NOT `@modelcontextprotocol/sdk`. Because this file exists precisely to
  * escape it: the official SDK's zod type graph OOMs `tsc` at 4GB, which is why the
  * original was hand-rolled and why its dist is built with esbuild. Rebuilding on
  * the official SDK would walk back into a documented, already-paid-for failure.
  *
- * WHAT DIVERGENCE IS EXPECTED. The two copies serve different lifecycles. Starmind's
- * carries the promote / snapshot / lazy-activation plugin machinery; Daedalus is
- * installed by `npm` and registered with a host directly and has none of it. Drift
- * here is the correct outcome, not a maintenance debt. If a bug is found in one,
+ * WHAT DIVERGENCE IS EXPECTED. The two copies serve different lifecycles: the kcd_sdk
+ * copy serves shipped plugin servers, this one a dev rig registered with a client
+ * directly. Drift here is the correct outcome, not a maintenance debt. If a bug is found in one,
  * fix it in both by hand and say so — but do not build a shared package to make
  * that unnecessary.
  *

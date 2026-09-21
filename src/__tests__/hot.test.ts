@@ -497,6 +497,37 @@ describe( 'the hot tools', () => {
 	// the second into a live Agent — so nothing about either channel changed. What changed is that the
 	// door stopped transcribing a reply whole when its reader asked for a slice of it.
 	//
+	describe( 'list_verbs — the diagnostic index', () => {
+
+		// bug-report-20. The whole surface arrived in one reply, every command's full JSON Schema inside it, and it
+		// was past what a client carries inline — the reply spilled to a file the moment it was asked for. A schema is
+		// an AUTHORING fact, and `describe_surface` already serves one by address; this is the diagnostic view.
+
+		it( 'lists each command by name, lane and description, and carries no schema', async () => {
+			const body = await json( 'list_verbs' );
+			const commands = body[ 'commands' ] as Record<string, unknown>[];
+			expect( commands.map( ( c ) => c[ 'name' ] ) ).toEqual( [ 'chat_send' ] );
+			for ( const c of commands ) {
+				expect( Object.keys( c ).sort() ).toEqual( [ 'desc', 'lane', 'name' ] );
+			}
+		} );
+
+		it( 'says in the reply where the schemas went, so a short list cannot read as a complete one', async () => {
+			const body = await json( 'list_verbs' );
+			expect( String( body[ 'schemas' ] ) ).toContain( 'describe_surface' );
+			expect( String( body[ 'schemas' ] ) ).toContain( 'emit:' );
+		} );
+
+		it( 'keeps served, declared and pulled as three answers — the delta between them is the finding', async () => {
+			const body = await json( 'list_verbs' );
+			const served = body[ 'served' ] as { channel: string; ops: string[] | null }[];
+			const pulls  = body[ 'pulls' ] as { channel: string; armed: boolean; reads: string[]; writes: string[] }[];
+			expect( served.find( ( e ) => e.channel === 'agent_store' )?.ops ).toEqual( [ 'list', 'get' ] );
+			expect( pulls.find( ( e ) => e.channel === 'project_store' ) ).toMatchObject( { armed: false, reads: [ 'list' ], writes: [ 'create' ] } );
+			expect( body[ 'shapes' ] ).toMatchObject( { shaped: 1 } );
+		} );
+	} );
+
 	// The property under test throughout is that the CALL is identical either way. A projected read and
 	// an unprojected one must reach the app the same, or this stops being the road the product ships.
 
@@ -558,7 +589,7 @@ describe( 'the hot tools', () => {
 			const wide = await json( 'read_state', { channel: 'models', op: 'roster' } );
 			expect( wide[ 'value' ] ).toBeUndefined();
 			expect( String( wide[ 'withheld' ] ) ).toContain( 'fields' );
-			expect( wide[ 'bytes' ] ).toBeGreaterThan( 256 * 1024 );
+			expect( wide[ 'bytes' ] ).toBeGreaterThan( 300_000 );
 			expect( wide[ 'keys' ] ).toEqual( [ 'key', 'doc' ] );
 
 			// Naming fields is the caller saying what it wants, and it is transcribed as asked.
@@ -571,6 +602,31 @@ describe( 'the hot tools', () => {
 			const body = await json( 'read_state', { channel: 'models', op: 'roster' } );
 			expect( body[ 'value' ] ).toHaveLength( 2 );
 			expect( body[ 'withheld' ] ).toBeUndefined();
+		} );
+
+		it( 'withholds a reply the client would have spilled, well short of a connection-closing size', async () => {
+			// bug-report-20. The ceiling sat at 256 KB, set against a client CLOSING the connection; the client stops
+			// carrying a reply inline long before that, at roughly 90 KB, and spills it to a file. A reply this size
+			// passed the old ceiling and failed at the client, which is the outcome the ceiling exists to prevent.
+			app.pull( 'models', { reads: [ 'roster' ], writes: [ 'send' ], fn: () => [ { key: 'wide', doc: 'D'.repeat( 100_000 ) } ] } );
+
+			const wide = await json( 'read_state', { channel: 'models', op: 'roster' } );
+			expect( wide[ 'value' ] ).toBeUndefined();
+			expect( String( wide[ 'withheld' ] ) ).toContain( 'fields' );
+			expect( wide[ 'keys' ] ).toEqual( [ 'key', 'doc' ] );
+		} );
+
+		it( 'measures the ceiling on the reply as transcribed, not as compact JSON', async () => {
+			// Small rows compact to far less than they transcribe: indentation nearly doubles a real reply. A ceiling
+			// read off the compact form lets through a reply the client then refuses, so this list is under the
+			// ceiling compacted and over it as the door writes it out.
+			const rows = Array.from( { length: 3_000 }, ( _v, i ) => ( { a: i, b: 2 } ) );
+			app.pull( 'models', { reads: [ 'roster' ], writes: [ 'send' ], fn: () => rows } );
+			expect( JSON.stringify( rows ).length ).toBeLessThan( 60_000 );
+
+			const wide = await json( 'read_state', { channel: 'models', op: 'roster' } );
+			expect( wide[ 'value' ] ).toBeUndefined();
+			expect( wide[ 'bytes' ] ).toBeGreaterThan( 60_000 );
 		} );
 
 		it( 'withholds a WRITE product over the ceiling without undoing the write', async () => {
