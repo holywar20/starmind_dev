@@ -341,11 +341,9 @@ export const Testbed = new class Testbed {
 	}
 
 	agentWire( manifest: Manifest, id: string, model = manifest.agent.model ): Record<string, unknown> {
-		const toolPolicies: Record<string, string> = {};
-		const toolSurfaces: Record<string, string> = {};
+		const toolModes: Record<string, string> = {};
 		for ( const tool of manifest.agent.tools ) {
-			toolPolicies[ tool ] = 'allow';
-			if ( manifest.agent.surface === 'preload' ) toolSurfaces[ tool ] = 'preload';
+			toolModes[ tool ] = manifest.agent.surface === 'preload' ? 'preload' : 'on';
 		}
 		return {
 			id,
@@ -357,8 +355,7 @@ export const Testbed = new class Testbed {
 			systemPrompt:   null,
 			lenses:         [],
 			baseHabits:     [],
-			toolPolicies,
-			toolSurfaces,
+			toolModes,
 			createdAt:      Date.now()
 		};
 	}

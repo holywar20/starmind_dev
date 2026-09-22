@@ -200,25 +200,23 @@ export class TestApp {
 /**
  * One serialized agent, in the shape `Agent.fromSerialized` actually takes.
  *
- * TWO AXES SINCE 2026-08-26, and the double follows the product rather than the other way round.
- * `toolPolicies` says whether a tool MAY RUN — presence is the allowance, and a denial is ABSENCE rather
- * than an `off` sitting in the map. `toolSurfaces` says how much of a held tool rides in the prompt:
- * `manifest` is a name and a line, `preload` is the full schema up front. `preloadedToolIds()` reads the
- * second, which is what the renderer sends as `toolNames`.
+ * ONE AXIS AGAIN SINCE 2026-09-22, and the double follows the product rather than the other way round.
+ * `toolModes` says what the agent CARRIES and how much of each rides — `on` is a name and a line, `preload`
+ * is the full schema up front, and `off` is never stored because absence is the state.
  *
- * The single `toolModes` map this replaced could not express that split, and a double still speaking it
- * would satisfy assertions the app can no longer produce — which is the exact failure this file already
- * carries a warning about one function down.
+ * IT WAS TWO MAPS FOR A MONTH ( `toolPolicies` + `toolSurfaces` ), splitting may-it-run from what-it-costs.
+ * The permission half moved to the passport, where it belongs: an agent is a prototype and a run's papers
+ * are minted from it. A double still speaking the two-map shape would satisfy assertions the app can no
+ * longer produce — which is the exact failure this file already carries a warning about one function down.
  */
 export function agentRow(
 	id: string, name: string,
-	toolPolicies: Record<string, string> = {},
-	toolSurfaces: Record<string, string> = {}
+	toolModes: Record<string, string> = {}
 ): Record<string, unknown> {
 	return {
 		id, name, projectId: 'p1', icon: '', color: '', model: null, systemPrompt: '',
 		lenses: [], baseTools: [], baseHabits: [], loadedHabits: [],
-		toolPolicies, toolSurfaces,
+		toolModes,
 		fields: [], system: {}, createdAt: 0, folder: null, notes: '',
 		baseHabitNodes: []
 	};

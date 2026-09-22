@@ -51,12 +51,10 @@ describe( 'the hot tools', () => {
 		return r.content[ 0 ]!.text!;
 	}
 
-	/** The one agent the app holds. BOTH tools are ALLOWED to run; only `srv.grep` is PRELOADED. That split is
-	 *  the point: the wire carries preloaded ids, so an agent holding two tools sends one — and a double that
+	/** The one agent the app holds. BOTH tools are CARRIED; only `srv.grep` is PRELOADED. That split is the
+	 *  point: the wire carries preloaded ids, so an agent holding two tools sends one — and a double that
 	 *  could not express the difference would pass on a shape the app cannot produce. */
-	const tester = agentRow( 'a1', 'Tester',
-		{ 'srv.grep': 'allow', 'srv.write': 'allow' },
-		{ 'srv.grep': 'preload', 'srv.write': 'manifest' } );
+	const tester = agentRow( 'a1', 'Tester', { 'srv.grep': 'preload', 'srv.write': 'on' } );
 
 	beforeEach( async () => {
 		app = await new TestApp()
@@ -249,11 +247,11 @@ describe( 'the hot tools', () => {
 	it( 'carries the tool surface a spawn would send, and previews the prompt rather than transcribing it', async () => {
 		onModel();
 		const body  = await json( 'describe_agent', { agent: 'a1' } );
-		const tools = body[ 'tools' ] as { preloaded: string[]; policies: Record<string, string> };
+		const tools = body[ 'tools' ] as { preloaded: string[]; modes: Record<string, string> };
 		// THE SAME ANSWER `spawn_agent` SENDS AS `toolNames` — computed off the same bound defs. The preload
 		// REQUEST, which the passport narrows at compile; not the wire.
 		expect( tools.preloaded ).toEqual( [ 'srv.grep' ] );
-		expect( tools.policies ).toEqual( { 'srv.grep': 'allow', 'srv.write': 'allow' } );
+		expect( tools.modes ).toEqual( { 'srv.grep': 'preload', 'srv.write': 'on' } );
 
 		const prompt = body[ 'systemPrompt' ] as { chars: number; opening: string };
 		expect( prompt.chars ).toBe( PROMPT.length );

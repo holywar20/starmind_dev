@@ -77,9 +77,9 @@ describe( 'the board a run starts from', () => {
 		expect( () => Testbed.board( broken, 'C:\\tb', 'agent-1', [] ) ).toThrow( /nobody/ );
 	} );
 
-	it( 'gives the subject exactly the manifest\'s tools, each allowed', () => {
+	it( 'gives the subject exactly the manifest\'s tools, each carried', () => {
 		const wire = Testbed.agentWire( manifest(), 'agent-1' );
-		expect( wire[ 'toolPolicies' ] ).toEqual( { 'sm_file.read': 'allow', 'sm_board.ask': 'allow' } );
+		expect( wire[ 'toolModes' ] ).toEqual( { 'sm_file.read': 'on', 'sm_board.ask': 'on' } );
 		expect( wire[ 'projectId' ] ).toBe( 'tidepool-testbed' );
 		expect( wire[ 'lenses' ] ).toEqual( [] );
 	} );
@@ -124,10 +124,10 @@ describe( 'the edge-case spellings', () => {
 
 	it( 'preloads every tool when the manifest says so, and leaves them deferred when it does not', () => {
 		const m = manifest();
-		expect( Testbed.agentWire( m, 'a' )[ 'toolSurfaces' ] ).toEqual( {} );
+		expect( Testbed.agentWire( m, 'a' )[ 'toolModes' ] ).toEqual( { 'sm_file.read': 'on', 'sm_board.ask': 'on' } );
 
 		m.agent.surface = 'preload';
-		expect( Testbed.agentWire( m, 'a' )[ 'toolSurfaces' ] ).toEqual( { 'sm_file.read': 'preload', 'sm_board.ask': 'preload' } );
+		expect( Testbed.agentWire( m, 'a' )[ 'toolModes' ] ).toEqual( { 'sm_file.read': 'preload', 'sm_board.ask': 'preload' } );
 	} );
 } );
 

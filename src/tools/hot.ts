@@ -805,8 +805,7 @@ export function hotTools(): ToolDefinition[] {
 					lenses:       summary.lensPaths,
 					systemPrompt: prompt === null ? null : { chars: prompt.length, opening: prompt.slice( 0, PROMPT_PREVIEW ) },
 					tools: {
-						policies:  agent.toolPolicies,
-						surfaces:  agent.toolSurfaces,
+						modes:     agent.toolModes,
 						preloaded: agent.preloadedToolIds()
 					}
 				} );
