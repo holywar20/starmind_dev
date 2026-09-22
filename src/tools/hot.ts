@@ -243,29 +243,28 @@ interface SessionRef {
 }
 
 /**
- * Resolve an agent reference to a REHYDRATED Agent, by id or exact name.
+ * Resolve an agent reference to a REHYDRATED Agent, by id or name.
  *
- * Out of process, so it takes the renderer's road: match on the `agent_store.list` roster, which is
- * summaries, then fetch that one agent whole through `agent_store.get` and hydrate the wire form.
+ * Out of process, so it takes the renderer's road: resolve to a summary, then fetch that one agent whole through `agent_store.get` and hydrate the wire form.
  * `agent_store.live` is no use from here — it hands over the canonical object, and an object does not
  * cross a process boundary.
  *
- * EXACT NAME MATCHING, never fuzzy: a test that silently ran as the wrong agent is the same class of
- * defect this entire surface exists to stop.
+ * BY ID, NAME, OR A NEAR MISS — the app's own resolver ( `agent_store.resolve`, plan agents-own-behaviour task 70 ).
+ * A test that silently ran as the wrong agent is the defect this surface exists to stop, so an AMBIGUOUS name is
+ * refused with the candidates rather than chosen for; only a reference that lands on exactly one agent runs.
  *
- * The matched SUMMARY rides back beside the agent. It was already read to find the match, and it is where
- * the authored lens paths live — `describe_agent` reports them without a second trip.
+ * The matched SUMMARY rides back beside the agent. It is where the authored lens paths live —
+ * `describe_agent` reports them without a second trip.
  */
 async function resolveAgent( ref: string, tool: string ): Promise<{ agent: Agent; summary: AgentSummary } | { refusal: ToolResult }> {
-	const listed = await verb( 'agent_store.list', tool );
-	if ( 'refusal' in listed ) return listed;
+	const resolved = await verb( 'agent_store.resolve', tool, ref );
+	if ( 'refusal' in resolved ) return resolved;
 
-	const rows  = ( listed.value ?? [] ) as AgentSummary[];
-	const match = rows.find( ( a ) => a.id === ref ) ?? rows.find( ( a ) => a.name === ref );
-	if ( !match ) {
-		const names = rows.map( ( a ) => `${ a.name } ( ${ a.id } )` ).join( ', ' ) || 'none — the app holds no agents';
-		return { refusal: fail( `${ tool }: no agent matches "${ ref }". Matching is by id or EXACT name, deliberately. Available: ${ names }` ) };
+	const answer = resolved.value as { status: string; match?: AgentSummary; message?: string } | null;
+	if ( !answer || answer.status !== 'found' || !answer.match ) {
+		return { refusal: fail( `${ tool }: ${ answer?.message ?? `no agent matches "${ ref }".` } Call list_sessions to see them.` ) };
 	}
+	const match = answer.match;
 
 	const got = await verb( 'agent_store.get', tool, match.id );
 	if ( 'refusal' in got ) return got;
@@ -764,7 +763,7 @@ export function hotTools(): ToolDefinition[] {
 			description: 'Read one agent whole — its model and the provider serving it, its lenses, its system prompt, and the tools it is CONFIGURED with. For what one run would actually carry, see the doc.',
 			doc:
 				'The question to ask BEFORE spawning, and the one `list_sessions` only half answers. `agent` takes an id ' +
-				'or EXACT name — the rule `spawn_agent` resolves by, so what this describes is what a spawn would run.\n\n' +
+				'or name — the rule `spawn_agent` resolves by, so what this describes is what a spawn would run.\n\n' +
 				'`model.provider` answers "is this Claude or a local model": `anthropic` and `claude_code_max` are Claude, ' +
 				'`local` and `remote` are served endpoints, `test` is the scripted brain. A key the roster does not hold ' +
 				'comes back `unresolved` rather than guessed, and `model: null` is an agent that never dispatches.\n\n' +
@@ -782,13 +781,13 @@ export function hotTools(): ToolDefinition[] {
 			inputSchema: {
 				type:       'object',
 				properties: {
-					agent: { type: 'string', description: 'Agent id, or the agent\'s exact name.' }
+					agent: { type: 'string', description: 'Agent id, or its name — a near miss resolves when it matches one agent; an ambiguous name returns the candidates.' }
 				},
 				required: [ 'agent' ]
 			},
 			handler: async ( args ) => {
 				const ref = String( args[ 'agent' ] ?? '' );
-				if ( !ref ) return fail( 'describe_agent needs an "agent" — an agent id or exact name. Call list_sessions to see them.' );
+				if ( !ref ) return fail( 'describe_agent needs an "agent" — an agent id or name. Call list_sessions to see them.' );
 
 				const resolved = await resolveAgent( ref, 'describe_agent' );
 				if ( 'refusal' in resolved ) return resolved.refusal;
@@ -820,7 +819,7 @@ export function hotTools(): ToolDefinition[] {
 			doc:
 				'Starts a REAL session, not a simulation: the same sequence the composer performs when a person ' +
 				'presses Send, so what it exercises is what ships.\n\n' +
-				'`agent` accepts an agent id or its EXACT name. `prompt` is the first turn.\n\n' +
+				'`agent` accepts an agent id or its name; an ambiguous name is refused with the candidates. `prompt` is the first turn.\n\n' +
 				'FIRE AND FORGET, WITH A WAY TO WAIT. The call returns as soon as the turn is accepted, carrying ' +
 				'`sessionId`, `traceId` and `turnsBefore`. A turn takes 30-90 seconds, so blocking here would spend the ' +
 				'tool budget asleep — but the run still has to know when it finished. Hand `sessionId` and `turnsBefore` ' +
@@ -843,7 +842,7 @@ export function hotTools(): ToolDefinition[] {
 			inputSchema: {
 				type:       'object',
 				properties: {
-					agent:  { type: 'string', description: 'Agent id, or the agent\'s exact name.' },
+					agent:  { type: 'string', description: 'Agent id, or its name — a near miss resolves when it matches one agent; an ambiguous name returns the candidates.' },
 					prompt: { type: 'string', description: 'The first turn to send.' }
 				},
 				required: [ 'agent', 'prompt' ]
@@ -851,7 +850,7 @@ export function hotTools(): ToolDefinition[] {
 			handler: async ( args ) => {
 				const ref    = String( args[ 'agent' ] ?? '' );
 				const prompt = String( args[ 'prompt' ] ?? '' );
-				if ( !ref )    return fail( 'spawn_agent needs an "agent" — an agent id or exact name. Call list_sessions to see them.' );
+				if ( !ref )    return fail( 'spawn_agent needs an "agent" — an agent id or name. Call list_sessions to see them.' );
 				if ( !prompt ) return fail( 'spawn_agent needs a "prompt" — the first turn to send.' );
 
 				const resolved = await resolveAgent( ref, 'spawn_agent' );
@@ -1302,7 +1301,7 @@ export function hotTools(): ToolDefinition[] {
 
 		{
 			name:        'call_tool',
-			description: 'Call one tool directly and get the gate verdict — optionally judged against the passport of a named run instead of the dev principal. The governed lane.',
+			description: 'Call one tool directly and get the gate verdict. Stands in the default project unless `asProject` names another; `asSession` judges it against a named run instead. The governed lane.',
 			doc:
 				'THE ONLY GOVERNED LANE ON THIS SURFACE, and the only one that can call a tool at all. Every ' +
 				'other tool here reaches a bus verb or a pull op, which is the whole application MINUS its tool ' +
@@ -1318,6 +1317,11 @@ export function hotTools(): ToolDefinition[] {
 				'instrument that drives every surface. Naming a session judges the call against the reach of THAT ' +
 				'run instead, which is the only way to assert that a live agent policy CONSTRAINS ' +
 				'something rather than merely that this key is powerful.\n\n' +
+				'UNBORROWED, THE CALL STANDS IN A PROJECT &mdash; `asProject` when named, else the app\'s default ' +
+				'project. It keeps the every-tool row and takes that project\'s REACH and DENIALS, so the ' +
+				'documentation tools have a vault and `sm_log` entries land in the project\'s action log. A project ' +
+				'`deny` and the master stop still refuse it, and nothing it is asked is remembered. This is the road ' +
+				'for OPERATING in the project; `asSession` is the road for testing a run. Name one or neither.\n\n' +
 				'THE RUN MUST ALREADY HOLD A PASSPORT. One is issued when a session takes its first turn, or ' +
 				'authored through the capability deck. This reads an existing document and will not mint one, ' +
 				'deliberately: a harness that created the papers it is testing would widen the thing it is ' +
@@ -1333,7 +1337,8 @@ export function hotTools(): ToolDefinition[] {
 				properties: {
 					tool:      { type: 'string', description: 'Tool identity, "group.tool" — e.g. "sm_file.glob".' },
 					args:      { type: 'object', description: 'The arguments of the tool itself, exactly as an agent would send them.' },
-					asSession: { type: 'string', description: 'Judge against the passport of THIS run instead of the dev principal. The run must already hold one.' }
+					asSession: { type: 'string', description: 'Judge against the passport of THIS run instead of the dev principal. The run must already hold one.' },
+					asProject: { type: 'string', description: 'Stand in THIS project instead of the default one. Not with asSession — a run already has a project.' }
 				},
 				required: [ 'tool' ]
 			},
@@ -1344,7 +1349,8 @@ export function hotTools(): ToolDefinition[] {
 				const reply = await Door.callTool(
 					tool,
 					( args[ 'args' ] ?? {} ) as Record<string, unknown>,
-					args[ 'asSession' ] ? String( args[ 'asSession' ] ) : undefined
+					args[ 'asSession' ] ? String( args[ 'asSession' ] ) : undefined,
+					args[ 'asProject' ] ? String( args[ 'asProject' ] ) : undefined
 				);
 				if ( !isOk( reply ) ) return refuse( reply, `call_tool ( ${ tool } )` );
 				return ok( reply.value );

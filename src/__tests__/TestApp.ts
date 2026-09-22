@@ -217,10 +217,9 @@ export function agentRow(
 ): Record<string, unknown> {
 	return {
 		id, name, projectId: 'p1', icon: '', color: '', model: null, systemPrompt: '',
-		lenses: [], baseTools: [], baseHabits: [], baseReferences: [], basePlans: [],
+		lenses: [], baseTools: [], baseHabits: [], loadedHabits: [],
 		toolPolicies, toolSurfaces,
-		referenceOff: [], referenceModes: {}, habitOff: [], habitModes: {},
 		fields: [], system: {}, createdAt: 0, folder: null, notes: '',
-		baseHabitNodes: [], baseReferenceNodes: []
+		baseHabitNodes: []
 	};
 }

@@ -357,8 +357,6 @@ export const Testbed = new class Testbed {
 			systemPrompt:   null,
 			lenses:         [],
 			baseHabits:     [],
-			baseReferences: [],
-			basePlans:      [],
 			toolPolicies,
 			toolSurfaces,
 			createdAt:      Date.now()

@@ -269,9 +269,17 @@ export const Door = new class Door {
 	 * principal, which holds `allow` on every tool the app serves — so the borrow NARROWS to one run's
 	 * reach rather than granting anything. That is the assertion worth making: not that this key is
 	 * powerful, but that a live agent policy constrains a call.
+	 *
+	 * Unborrowed, the call STANDS IN A PROJECT — `asProject`, else the app's default — and takes that
+	 * project's reach and denials, so a documentation tool has a vault to open. That is the operating road;
+	 * `asSession` is the testing one. Name one or neither, never both.
 	 */
-	callTool( tool: string, args?: Record<string, unknown>, asSession?: string ): Promise<DoorReply> {
-		return this._call( 'tool', { tool, args: args ?? {}, ...( asSession ? { asSession } : {} ) }, tool );
+	callTool( tool: string, args?: Record<string, unknown>, asSession?: string, asProject?: string ): Promise<DoorReply> {
+		return this._call( 'tool', {
+			tool, args: args ?? {},
+			...( asSession ? { asSession } : {} ),
+			...( asProject ? { asProject } : {} )
+		}, tool );
 	}
 
 	/**

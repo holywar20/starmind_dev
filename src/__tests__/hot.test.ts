@@ -4,6 +4,15 @@ import { Agent, type SerializedAgent } from '@kcd/core';
 import { hotTools } from '../tools/hot';
 import { TestApp, agentRow } from './TestApp';
 
+/** The app's `agent_store.resolve`, doubled: by id, or by name in any case. The fuzzy pass is the app's and is
+ *  tested there; what is tested here is what the tool does with each answer. */
+function resolveIn( rows: Record<string, unknown>[], ref: string ): unknown {
+	const match = rows.find( ( r ) => r[ 'id' ] === ref || String( r[ 'name' ] ).toLowerCase() === ref.toLowerCase() );
+	return match
+		? { status: 'found', match: Agent.fromSerialized( match as unknown as SerializedAgent ).summarize() }
+		: { status: 'none', message: `No agent matches "${ ref }".` };
+}
+
 /**
  * The hot tools, driven through the REAL Door over a REAL socket into a scripted app.
  *
@@ -55,6 +64,8 @@ describe( 'the hot tools', () => {
 			// The roster is summaries, built by the SDK's own `summarize` so the double cannot drift from what main
 			// sends; the agent itself comes whole through `get`.
 			.verb( 'agent_store.list', () => [ Agent.fromSerialized( tester as unknown as SerializedAgent ).summarize() ] )
+			// The app's resolver answers found / ambiguous / none; the double answers by id or name, any case.
+			.verb( 'agent_store.resolve', ( ref ) => resolveIn( [ tester ], String( ref ) ) )
 			.verb( 'agent_store.get', ( id ) => ( id === 'a1' ? tester : null ) )
 			.verb( 'session_store.list', () => [ { id: 's1', agentId: 'a1', title: 'One', status: 'active' } ] )
 			.verb( 'session_store.get', ( id ) => ( id === 's1' ? { id: 's1', agentId: 'a1' } : null ) )
@@ -133,7 +144,7 @@ describe( 'the hot tools', () => {
 		// FOUR STEPS, NOT THREE — the tool-def bind used to be invisible here, because a rehydrated agent
 		// once computed its suggested surface off the mode map alone. It reads the DEFS now, so the bind is a
 		// real step on the road and is asserted as one rather than left to be rediscovered by a live run.
-		expect( app.asked.map( ( a ) => a.verb ) ).toEqual( [ 'agent_store.list', 'agent_store.get', 'mcp_store.tools', 'session_store.create', 'session_store.set_folder', 'chat_send' ] );
+		expect( app.asked.map( ( a ) => a.verb ) ).toEqual( [ 'agent_store.resolve', 'agent_store.get', 'mcp_store.tools', 'session_store.create', 'session_store.set_folder', 'chat_send' ] );
 		expect( app.asked[ 5 ]!.mode ).toBe( 'emit' );
 		// The roster is only matched against; the graph is fetched for the ONE agent that matched.
 		expect( app.asked[ 1 ] ).toMatchObject( { verb: 'agent_store.get', args: [ 'a1' ] } );
@@ -148,14 +159,18 @@ describe( 'the hot tools', () => {
 		expect( String( body[ 'traceId' ] ) ).not.toHaveLength( 0 );
 	} );
 
-	it( 'resolves an agent by exact name as well as by id, and refuses a near miss', async () => {
-		const byName = await json( 'spawn_agent', { agent: 'Tester', prompt: 'go' } );
+	it( 'runs the one agent the app resolves a name to, and refuses an ambiguous or unknown one with its reason', async () => {
+		const byName = await json( 'spawn_agent', { agent: 'tester', prompt: 'go' } );
 		expect( byName[ 'agentId' ] ).toBe( 'a1' );
 
-		// EXACT, never fuzzy: a test that silently ran as the wrong agent is the same class of defect
-		// this entire surface exists to stop.
-		const near = await refusal( 'spawn_agent', { agent: 'tester', prompt: 'go' } );
-		expect( near ).toContain( 'no agent matches' );
+		// Ambiguity is refused with the candidates rather than chosen for: a test that silently ran as the
+		// wrong agent is the defect this entire surface exists to stop.
+		app.verb( 'agent_store.resolve', () => ( { status: 'ambiguous', candidates: [], message: '"t" matches more than one agent: Tester ( a1 ), Tessa ( a2 ).' } ) );
+		expect( await refusal( 'spawn_agent', { agent: 't', prompt: 'go' } ) ).toContain( 'matches more than one agent' );
+
+		app.verb( 'agent_store.resolve', () => ( { status: 'none', message: 'No agent matches "nobody".' } ) );
+		expect( await refusal( 'spawn_agent', { agent: 'nobody', prompt: 'go' } ) ).toContain( 'No agent matches "nobody"' );
+		expect( app.asked.filter( ( a ) => a.verb === 'chat_send' ) ).toHaveLength( 1 );
 	} );
 
 	it( 'refuses a spawn whose agent left the registry between the roster read and the fetch', async () => {
@@ -182,7 +197,7 @@ describe( 'the hot tools', () => {
 		// can represent.
 		const body = await json( 'send_to_agent', { sessionId: 's1', message: 'more' } );
 		expect( body[ 'agentId' ] ).toBe( 'a1' );
-		expect( app.asked.map( ( a ) => a.verb ) ).toEqual( [ 'session_store.get', 'agent_store.list', 'agent_store.get', 'mcp_store.tools', 'communication.turns', 'chat_send' ] );
+		expect( app.asked.map( ( a ) => a.verb ) ).toEqual( [ 'session_store.get', 'agent_store.resolve', 'agent_store.get', 'mcp_store.tools', 'communication.turns', 'chat_send' ] );
 	} );
 
 	// ── Describing an agent ──────────────────────────────────────────────────────────────────
@@ -194,6 +209,7 @@ describe( 'the hot tools', () => {
 	function onModel(): void {
 		const modeled = { ...tester, model: 'cc.sonnet', systemPrompt: PROMPT };
 		app.verb( 'agent_store.list', () => [ Agent.fromSerialized( modeled as unknown as SerializedAgent ).summarize() ] )
+			.verb( 'agent_store.resolve', ( ref ) => resolveIn( [ modeled ], String( ref ) ) )
 			.verb( 'agent_store.get', ( id ) => ( id === 'a1' ? modeled : null ) )
 			.pull( 'models', { reads: [ 'roster' ], fn: () => [
 				{ key: 'cc.sonnet', label: 'Sonnet', provider: 'claude_code_max', modelId: 'claude-sonnet-5',
@@ -244,9 +260,9 @@ describe( 'the hot tools', () => {
 		expect( prompt.opening ).toBe( PROMPT.slice( 0, 200 ) );
 	} );
 
-	it( 'refuses a near-miss name, by the same exact rule a spawn resolves by', async () => {
-		const near = await refusal( 'describe_agent', { agent: 'tester' } );
-		expect( near ).toContain( 'no agent matches' );
+	it( 'refuses a name the app cannot resolve, by the same rule a spawn resolves by', async () => {
+		const miss = await refusal( 'describe_agent', { agent: 'nobody' } );
+		expect( miss ).toContain( 'No agent matches "nobody"' );
 	} );
 
 	// ── Policy writes ────────────────────────────────────────────────────────────────────────
@@ -522,7 +538,7 @@ describe( 'the hot tools', () => {
 			const body = await json( 'list_verbs' );
 			const served = body[ 'served' ] as { channel: string; ops: string[] | null }[];
 			const pulls  = body[ 'pulls' ] as { channel: string; armed: boolean; reads: string[]; writes: string[] }[];
-			expect( served.find( ( e ) => e.channel === 'agent_store' )?.ops ).toEqual( [ 'list', 'get' ] );
+			expect( served.find( ( e ) => e.channel === 'agent_store' )?.ops ).toEqual( [ 'list', 'resolve', 'get' ] );
 			expect( pulls.find( ( e ) => e.channel === 'project_store' ) ).toMatchObject( { armed: false, reads: [ 'list' ], writes: [ 'create' ] } );
 			expect( body[ 'shapes' ] ).toMatchObject( { shaped: 1 } );
 		} );
