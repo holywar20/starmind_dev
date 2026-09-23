@@ -245,7 +245,7 @@ interface SessionRef {
 /**
  * Resolve an agent reference to a REHYDRATED Agent, by id or name.
  *
- * Out of process, so it takes the renderer's road: resolve to a summary, then fetch that one agent whole through `agent_store.get` and hydrate the wire form.
+ * Out of process, so it takes the renderer's road: resolve the name to a roster row, then fetch that one agent WHOLE through `agent_store.get` and hydrate the wire form. The row is identity only and is thrown away here — every caller wants the agent, and a caller reading the row for anything else would be reading a subset that does not say it is one.
  * `agent_store.live` is no use from here — it hands over the canonical object, and an object does not
  * cross a process boundary.
  *
@@ -256,7 +256,7 @@ interface SessionRef {
  * The matched SUMMARY rides back beside the agent. It is where the authored lens paths live —
  * `describe_agent` reports them without a second trip.
  */
-async function resolveAgent( ref: string, tool: string ): Promise<{ agent: Agent; summary: AgentSummary } | { refusal: ToolResult }> {
+async function resolveAgent( ref: string, tool: string ): Promise<{ agent: Agent } | { refusal: ToolResult }> {
 	const resolved = await verb( 'agent_store.resolve', tool, ref );
 	if ( 'refusal' in resolved ) return resolved;
 
@@ -290,7 +290,7 @@ async function resolveAgent( ref: string, tool: string ): Promise<{ agent: Agent
 	if ( !isOk( defs ) ) return { refusal: refuse( defs, `${ tool } ( binding tool defs )` ) };
 	agent.bindEnv( { toolDefs: ( ( defs.value ?? [] ) as { tools: ToolDef[] }[] ).flatMap( ( s ) => s.tools ?? [] ) } );
 
-	return { agent, summary: match };
+	return { agent };
 }
 
 /** The part of a `models.roster` row that answers "what serves this model". The row carries the Models
@@ -760,7 +760,7 @@ export function hotTools(): ToolDefinition[] {
 		{
 			name:        'describe_agent',
 			annotations: { readOnlyHint: true },
-			description: 'Read one agent whole — its model and the provider serving it, its lenses, its system prompt, and the tools it is CONFIGURED with. For what one run would actually carry, see the doc.',
+			description: 'Read one agent whole — its model and the provider serving it, its lenses and habits ( including any the record names and could not load ), its system prompt, and the tools it is CONFIGURED with. For what one run would actually carry, see the doc.',
 			doc:
 				'The question to ask BEFORE spawning, and the one `list_sessions` only half answers. `agent` takes an id ' +
 				'or name — the rule `spawn_agent` resolves by, so what this describes is what a spawn would run.\n\n' +
@@ -776,6 +776,10 @@ export function hotTools(): ToolDefinition[] {
 				'its own roster from there rather than repeating it. The three answers differ ON PURPOSE and the gap ' +
 				'between them is diagnostic: `policies` is what the agent DOCUMENT allows, `preloaded` is what a spawn ' +
 				'would REQUEST, and `capability/now` is what this run would be HANDED if it sent now.\n\n' +
+				'`lenses` and `habits` are what LOADED; `brokenLenses` and `brokenHabits` are what the record names and the ' +
+				'host could not load, each with the reason. Both broken lists are always present, empty when nothing is lost, ' +
+				'because a surface that omits them reads exactly like a surface that has none — and an agent quietly one lens ' +
+				'short is the most expensive wrong answer this tool can give.\n\n' +
 				'The system prompt is PREVIEWED, not transcribed: its length and its opening. `null` means none is set; ' +
 				'zero characters is one deliberately left empty.',
 			inputSchema: {
@@ -791,7 +795,7 @@ export function hotTools(): ToolDefinition[] {
 
 				const resolved = await resolveAgent( ref, 'describe_agent' );
 				if ( 'refusal' in resolved ) return resolved.refusal;
-				const { agent, summary } = resolved;
+				const agent = resolved.agent;
 
 				const model = await describeModel( agent.model, 'describe_agent' );
 				if ( 'refusal' in model ) return model.refusal;
@@ -802,7 +806,14 @@ export function hotTools(): ToolDefinition[] {
 					name:         agent.name,
 					projectId:    agent.projectId,
 					model:        model.value,
-					lenses:       summary.lensPaths,
+					lenses:       agent.lenses.map( ( l ) => l.getPath() ).filter( Boolean ),
+					// WHAT THE RECORD NAMES AND COULD NOT LOAD, beside what it did — always present, even empty.
+					// `lenses` alone is a SUBSET of the authored stack that does not say it is one, so an agent
+					// whose lens file moved described as an agent with fewer lenses, and this is the door a
+					// harness reads instead of the screen. Empty and absent must not look alike here.
+					brokenLenses: agent.brokenLenses.map( ( b ) => ( { name: b.name, position: b.position, reason: b.reason } ) ),
+					habits:       agent.baseHabits,
+					brokenHabits: agent.brokenHabits.map( ( b ) => ( { name: b.name, loaded: b.loaded, reason: b.reason } ) ),
 					systemPrompt: prompt === null ? null : { chars: prompt.length, opening: prompt.slice( 0, PROMPT_PREVIEW ) },
 					tools: {
 						modes:     agent.toolModes,

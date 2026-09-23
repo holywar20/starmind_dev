@@ -258,6 +258,36 @@ describe( 'the hot tools', () => {
 		expect( prompt.opening ).toBe( PROMPT.slice( 0, 200 ) );
 	} );
 
+	/**
+	 * THE DOOR THAT USED TO GO QUIET ( plan agents-own-behaviour, task 79 ).
+	 *
+	 * A lens or habit the record names and the host could not load is ABSENT from what loaded, so this tool
+	 * answered a subset that did not say it was one — an agent one lens short described as an agent with
+	 * fewer lenses. It is the surface a harness reads INSTEAD of the screen, where the broken-lens badge has
+	 * been visible all along.
+	 *
+	 * Both lists ride ALWAYS, empty included: an omitted key reads as "not reported" and an empty array reads
+	 * as "nothing lost", and collapsing those two is the whole defect.
+	 */
+	it( 'names the lenses and habits it LOST, and still says so when it lost none', async () => {
+		const clean = await json( 'describe_agent', { agent: 'a1' } );
+		expect( clean[ 'brokenLenses' ] ).toEqual( [] );
+		expect( clean[ 'brokenHabits' ] ).toEqual( [] );
+
+		const lost = { ...tester,
+			baseHabits:   [ '_Claude/habits/log-action/log-action.html' ],
+			brokenLenses: [ { id: 'l9', name: 'tester', position: 1, reason: 'missing' } ],
+			brokenHabits: [ { id: 'h9', name: 'track-todo', loaded: true, reason: 'invalid' } ] };
+		app.verb( 'agent_store.get', ( id ) => ( id === 'a1' ? lost : null ) );
+
+		const body = await json( 'describe_agent', { agent: 'a1' } );
+		expect( body[ 'habits' ] ).toEqual( [ '_Claude/habits/log-action/log-action.html' ] );
+		expect( body[ 'brokenLenses' ] ).toEqual( [ { name: 'tester', position: 1, reason: 'missing' } ] );
+		expect( body[ 'brokenHabits' ] ).toEqual( [ { name: 'track-todo', loaded: true, reason: 'invalid' } ] );
+		// The doc-index id stays out: it is linkage, and a reader debugging a lost lens needs its NAME.
+		expect( JSON.stringify( body ) ).not.toContain( 'l9' );
+	} );
+
 	it( 'refuses a name the app cannot resolve, by the same rule a spawn resolves by', async () => {
 		const miss = await refusal( 'describe_agent', { agent: 'nobody' } );
 		expect( miss ).toContain( 'No agent matches "nobody"' );
