@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 
 import { Agent, type AgentSummary, type SerializedAgent, type ToolDef } from '@kcd/core';
 
-import { Door, isOk, unreached, type DoorReply } from '../Door';
+import { Door, isOk, unreached, describeApp, type DoorReply } from '../Door';
 import type { ToolDefinition, ToolResult } from '../mcp';
 import { testbedTools } from './testbed';
 import { driveTools } from './drive';
@@ -59,13 +59,29 @@ const HARNESS_FOLDER = 'Harness Agents';
 /** JSON text is the return currency — every consumer here is a program or an agent asserting on
  *  fields, and a sentence would have to be parsed back. */
 function ok( value: unknown ): ToolResult {
-	return { content: [ { type: 'text', text: JSON.stringify( value, null, 2 ) } ] };
+	return {
+		content: [
+			{ type: 'text', text: JSON.stringify( value, null, 2 ) },
+			// WHICH APP THIS IS ABOUT, in a SECOND block rather than folded into the payload.
+			//
+			// The first block is parsed — by a test, by an agent, by anything downstream — and wrapping the
+			// value to make room for provenance would change the shape of every reply this surface has ever
+			// given, for a fact that is about the ANSWER rather than in it. MCP content is a list precisely
+			// so a result can carry more than one thing.
+			//
+			// It rides on SUCCESS as much as on failure, which is the half that matters: a refusal names the
+			// app because a reader is already asking what went wrong, and a success names it because nobody
+			// is asking anything — and an honest reading of the wrong process is the failure this whole
+			// arrangement is exposed to.
+			{ type: 'text', text: describeApp( Door.reached ) }
+		]
+	};
 }
 
 /** Refusals stay PROSE and say what would fix them — the one place this surface talks to a reader
  *  rather than a parser, and the reader is usually about to retry. */
 function fail( reason: string ): ToolResult {
-	return { content: [ { type: 'text', text: reason } ], isError: true };
+	return { content: [ { type: 'text', text: reason }, { type: 'text', text: describeApp( Door.reached ) } ], isError: true };
 }
 
 /**
@@ -455,7 +471,15 @@ export function hotTools(): ToolDefinition[] {
 				'ONLY `src/main` AND `src/shared` COUNT. The renderer hot-reloads, so a renderer edit does not ' +
 				'make a running main stale — including it would cry wolf on every component change. Note the ' +
 				'instrument is mtimes, so touching a file without changing it reads as newer: it errs toward ' +
-				'warning about a build that is fine over staying quiet about one that is not.',
+				'warning about a build that is fine over staying quiet about one that is not.\n\n' +
+				'THIS IS NOT NECESSARILY THE APP YOU ARE RUNNING IN, and on a dev machine it usually is not. ' +
+				'The dev door is refused outright in a packaged build, so the app answering here is whichever ' +
+				'copy is running UNPACKAGED on the configured port. A machine running both — a packaged copy ' +
+				'that keeps state and hosts the agents, and a throwaway dev copy under test — gives you the ' +
+				'second one, always. That is the arrangement working, not a fault, and it is why `app.pid` and ' +
+				'`app.packaged` ride this reply and every other hot reply: every answer this rig gives is ' +
+				'honest and every answer is about a process you are probably not in. Read a trace through here ' +
+				'and it is the DEV app\'s trace, whatever session you are sitting in.',
 			inputSchema: { type: 'object', properties: {}, required: [] },
 			handler:     async () => {
 				const reply = await Door.status();
@@ -477,7 +501,11 @@ export function hotTools(): ToolDefinition[] {
 							+ 'rebuild and the watcher is wedged.'
 					};
 				}
-				return ok( { reachedApp: true, door: Door.url, ...status } );
+				// `app` IN THE PAYLOAD HERE, as well as in the provenance block every reply carries. This is
+				// the orientation call, so which process answered is part of the ANSWER rather than a note
+				// beside it — and it is the one reply somebody might store, quote or diff, where a second
+				// content block is the half that gets dropped on the way.
+				return ok( { reachedApp: true, door: Door.url, app: Door.reached, ...status } );
 			}
 		},
 

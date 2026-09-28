@@ -106,6 +106,22 @@ const TOKEN_ENV = 'STARMIND_DEV_TOKEN';
  * still land on `public + 1`. Finding that costs one connect against a closed socket, while failing to
  * find it costs a debugging pass — so the asymmetry pays for the probe long after the arrangement is gone.
  * It retires when a stale checkout is no longer plausible, not on a date.
+ *
+ * ── THE PORT IS NOW A DECLARED SETTING, WHICH RETIRES THE GUESS ON ONE OF THE TWO ROADS ─────────
+ *
+ * `STARMIND_DEV_PORT` is declared as a config field in this server's MANIFEST, so when Starmind spawns
+ * it the variable is always present — a person's answer if they gave one, and the manifest's own default
+ * if they did not. On that road `candidates()` returns exactly one port and nothing is probed: the
+ * address stops being inferred and becomes a thing somebody decided, visible on a surface, changeable
+ * without editing a file.
+ *
+ * THE FALLBACK BELOW IS FOR THE OTHER ROAD and is not dead weight. Run standalone — `npm start`, or
+ * spawned by a plain `claude` session through the repo's `.mcp.json` — nothing injects the variable and
+ * the probe is still the only way to find the app. So `PUBLIC_PORT` is now the STANDALONE default rather
+ * than the only one, and it agrees with the manifest's by hand. That is one more home for the number than
+ * anybody wants ( `ports.mjs` already counts them and proposes the boot handshake that retires all of
+ * them ) — named here rather than hidden, because the honest cost of settling for a setting is that the
+ * default has to be written twice.
  */
 const PORT_ENV     = 'STARMIND_DEV_PORT';
 const PUBLIC_PORT  = 51789;
@@ -142,6 +158,39 @@ export type DoorReply =
 	 *  Named rather than folded into `threw`, because the fix for it is in THIS file. */
 	| { outcome: 'malformed';    verb: string; detail: string };
 
+/**
+ * WHICH APP ANSWERED — read off the `X-Starmind-App` header the dev door stamps on every reply.
+ *
+ * ── WHY THIS IS NOT A DETAIL ────────────────────────────────────────────────────────────────────
+ *
+ * Only an UNPACKAGED Starmind opens the dev door ( `DevLane.endpoint` returns a dead pair when
+ * `app.isPackaged` ). So on a machine running two copies — a packaged one that keeps state and hosts the
+ * agents, and a throwaway dev one under test — an agent asking this rig anything is reading a process it
+ * is not running in. Every answer is honest; every answer is about somewhere else.
+ *
+ * That is the intended arrangement, which is precisely why it needs saying on every reply rather than in a
+ * document somebody remembers. `read_state` against the wrong app returns real trace lines about code
+ * nobody is editing, and nothing in the reply would have said so.
+ *
+ * `pid` AND `port` together are the identity: a port is reused across a restart, and a pid says nothing
+ * about which door it opened.
+ */
+export interface AppStamp {
+	pid:      number;
+	port:     number;
+	packaged: boolean;
+	uptimeMs: number;
+}
+
+/** One line naming the app, for a reply a person or an agent reads. Null when nothing has answered yet —
+ *  which is itself worth saying, because it means no claim about any app has been made. */
+export function describeApp( app: AppStamp | null ): string {
+	if ( !app ) return 'No app has answered yet, so nothing here describes one.';
+	return `Answered by Starmind pid ${ app.pid } on port ${ app.port } `
+		+ `( ${ app.packaged ? 'PACKAGED' : 'unpackaged' }, up ${ Math.round( app.uptimeMs / 1000 ) }s ). `
+		+ 'This is the app the dev door is open on — NOT necessarily the one hosting you.';
+}
+
 /** Narrowing helper, so a caller writes `isOk( r )` rather than restating the discriminator in nine
  *  places and eventually getting it subtly wrong in one of them. */
 export function isOk( reply: DoorReply ): reply is Extract<DoorReply, { outcome: 'ok' }> {
@@ -162,14 +211,43 @@ export const Door = new class Door {
 	 *  refusal simply sends the probe back through the full candidate list. */
 	private _lastGood: number | null = null;
 
+	/** WHO answered most recently, off the header. Null until something has. Overwritten on every reply
+	 *  rather than cached once, so a restart that changes the pid is visible on the next call instead of
+	 *  the next process — which is the case this exists to catch. */
+	private _reached: AppStamp | null = null;
+
+	/** The app the last reply came from. Read by every hot tool as it formats, so no tool has to remember
+	 *  to ask and none can report on an app without naming it. */
+	get reached(): AppStamp | null {
+		return this._reached;
+	}
+
 	/**
-	 * Where to try, in order. An explicit `STARMIND_DEV_PORT` is taken as the whole answer — someone who
-	 * names a port is not asking to be second-guessed. Otherwise both arrangements are candidates.
+	 * THE PORT A SETTING NAMES, or null when nothing named one.
+	 *
+	 * Split out from `candidates` because two different readers want it: the walk, which stops at one port
+	 * when it has an answer, and the `app-down` reply, which has to say WHERE a person can change it. A
+	 * reply that named a port without saying whether anybody chose it sends the reader to the wrong file.
+	 *
+	 * Range-checked here rather than trusted. A non-numeric or out-of-range value falls back to the probe
+	 * instead of dialling nothing — the same reading `DevLane.endpoint` makes of a bad port on the app's
+	 * side, so a typo costs the fixed address rather than the whole road.
 	 */
-	candidates(): number[] {
+	configured(): number | null {
 		const raw = process.env[ PORT_ENV ];
 		const set = raw ? Number( raw ) : NaN;
-		if ( Number.isInteger( set ) && set > 0 ) return [ set ];
+		return Number.isInteger( set ) && set > 0 && set < 65536 ? set : null;
+	}
+
+	/**
+	 * Where to try, in order. A configured port is taken as the whole answer — somebody who named one is
+	 * not asking to be second-guessed, and since the manifest declares a default that is now the ordinary
+	 * case rather than the exception. Otherwise both arrangements are candidates; see the note above
+	 * `PORT_ENV` for why the probe survives.
+	 */
+	candidates(): number[] {
+		const set = this.configured();
+		if ( set !== null ) return [ set ];
 
 		const pub  = PUBLIC_PORT;
 		const list = [ pub, pub + 1 ];
@@ -398,15 +476,50 @@ export const Door = new class Door {
 			return got;
 		}
 
+		// WHERE THE ADDRESS CAME FROM decides which half of this reply is useful. A CONFIGURED port means
+		// somebody's answer is wrong or the app is down, and the fix is a field on a surface. An unconfigured
+		// one means we guessed, and the reader needs to know that before they go looking for a setting that
+		// was never set. Two different next actions, so they are two different sentences.
+		const set   = this.configured();
+		const where = set !== null
+			? `Port ${ set } is CONFIGURED — it is this server's \`${ PORT_ENV }\` setting, which you can change ` +
+			  'on its card in Servers & Tools ( saving restarts the server, so the new port is live at once ). ' +
+			  'If that is the right port, the app is not listening on it.'
+			: `Nothing configured this port, so it was GUESSED: ${ tried.join( ', ' ) } are the two arrangements ` +
+			  'this rig has ever used. Set the port on this server\'s card in Servers & Tools to stop guessing. ' +
+			  'Spawned standalone rather than by Starmind, there is no card — export ' + PORT_ENV + ' instead.';
+
 		return { outcome: 'app-down', verb, detail:
-			`Nothing is listening on 127.0.0.1 at any of: ${ tried.join( ', ' ) }. Either Starmind is not running, ` +
-			'or it is running somewhere no current script would put it. THE PORT IS NOT GUESSED BY EITHER SIDE: ' +
-			'the app binds what `starmind/.env` sets as STARMIND_ROUTER_PORT, and an unset value means an EPHEMERAL ' +
-			'port, which no fixed address can reach — so an app that started fine can still be unreachable from ' +
-			'here, and that is a configuration fact rather than a crash. There is ONE arrangement now: every dev ' +
-			'script leaves the app on that port. The second candidate above is probed only for a shell or checkout ' +
-			'predating the 2026-09-04 change. Set STARMIND_DEV_PORT here if the app has been moved somewhere else. ' +
+			`Nothing is listening on 127.0.0.1 at any of: ${ tried.join( ', ' ) }. ${ where } ` +
+			'THE APP\'S OWN HALF IS SEPARATE: it binds what `starmind/.env` sets as STARMIND_ROUTER_PORT, and an ' +
+			'unset value means an EPHEMERAL port, which no fixed address can reach — so an app that started fine ' +
+			'can still be unreachable from here, and that is a configuration fact rather than a crash. ' +
 			'NO VERB RAN, so nothing was tested.' };
+	}
+
+	/**
+	 * Take the app stamp off a reply's headers, or leave the last one standing.
+	 *
+	 * PARSED DEFENSIVELY because it is a header: a proxy may fold it into an array, an older app sends none
+	 * at all, and a malformed one must not take down a call that otherwise succeeded. A header we cannot
+	 * read is the same fact as one that was not sent — nothing new was learned — so both leave `_reached`
+	 * exactly as it was rather than clearing it to null, which would claim we had stopped knowing.
+	 */
+	private _noteApp( raw: string | string[] | undefined ): void {
+		const text = Array.isArray( raw ) ? raw[ 0 ] : raw;
+		if ( !text ) return;
+		try {
+			const parsed = JSON.parse( text ) as Partial<AppStamp>;
+			if ( typeof parsed.pid !== 'number' || typeof parsed.port !== 'number' ) return;
+			this._reached = {
+				pid:      parsed.pid,
+				port:     parsed.port,
+				packaged: parsed.packaged === true,
+				uptimeMs: typeof parsed.uptimeMs === 'number' ? parsed.uptimeMs : 0
+			};
+		} catch {
+			/* unreadable is the same as unsent — see above */
+		}
 	}
 
 	/** One attempt at one port. `'refused'` means keep walking; everything else is a verdict. */
@@ -426,6 +539,13 @@ export const Door = new class Door {
 					}
 				},
 				( res ) => {
+					// WHO ANSWERED, before anything is read of what they said. Recorded even on a 401 or a 404:
+					// those mean the app is THERE and refusing, which is a fact about a specific process, and
+					// a reader chasing a bad token needs to know which app's token is bad.
+					//
+					// An older app sends no header and leaves `_reached` as it was. That is the honest read —
+					// nothing new was learned — and `describeApp` says so rather than inventing a pid.
+					this._noteApp( res.headers[ 'x-starmind-app' ] );
 					let text = '';
 					res.setEncoding( 'utf8' );
 					res.on( 'data', ( chunk: string ) => { text += chunk; } );

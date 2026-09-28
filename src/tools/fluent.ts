@@ -1,5 +1,6 @@
 import { Surface, type SurfaceMap } from '../Surface';
 import { Steps, type Step } from '../Steps';
+import { Door, describeApp } from '../Door';
 import type { ToolDefinition, ToolResult } from '../mcp';
 
 /**
@@ -15,12 +16,29 @@ import type { ToolDefinition, ToolResult } from '../mcp';
  * package, so a renamed op is a lookup failure with a suggestion rather than a silent mismatch.
  */
 
+/**
+ * The same two formatters `hot` uses, and they carry the app stamp for the same reason.
+ *
+ * BOTH TOOLS HERE REACH THE APP — `describe_surface` reads its live registries and `sequence` drives it —
+ * so both are reports about a specific process, and on a machine running two copies of Starmind only one
+ * of them has this door open. A `sequence` that ran twenty steps against the wrong app is the most
+ * expensive version of that mistake available, because it looks like the most thorough answer.
+ *
+ * ONE STAMP AT THE END, not per step: every step of a run reaches the same app, so naming it twenty times
+ * would be twenty copies of one fact. `Door.reached` is the app the LAST reply came from, which for a
+ * sequence is the app that ran all of it.
+ */
 function ok( value: unknown ): ToolResult {
-	return { content: [ { type: 'text', text: JSON.stringify( value, null, 2 ) } ] };
+	return {
+		content: [
+			{ type: 'text', text: JSON.stringify( value, null, 2 ) },
+			{ type: 'text', text: describeApp( Door.reached ) }
+		]
+	};
 }
 
 function fail( reason: string ): ToolResult {
-	return { content: [ { type: 'text', text: reason } ], isError: true };
+	return { content: [ { type: 'text', text: reason }, { type: 'text', text: describeApp( Door.reached ) } ], isError: true };
 }
 
 export function fluentTools(): ToolDefinition[] {

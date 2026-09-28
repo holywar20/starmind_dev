@@ -12,8 +12,20 @@ import { dirname, join, resolve } from 'path';
  * RESOLUTION ORDER, most explicit first:
  *
  *   1. `--root <path>` on argv          — a caller placing the server deliberately
- *   2. `STARMIND_DEV_ROOT`              — a fixed answer for a fixed machine
+ *   2. `STARMIND_DEV_ROOT`              — a DECLARED SETTING, answered on this server's card
  *   3. walk UP from cwd                 — the ordinary case
+ *
+ * RUNG 2 IS NOW A FIELD, and the order did not have to change to make it one. It is declared in this
+ * server's manifest with NO DEFAULT, deliberately: a field that declares one resolves to it and the
+ * variable is always present, which would retire the walk for everybody to serve the few machines that
+ * need a fixed answer. Declaring no default means the variable appears only when somebody actually fills
+ * it in, so rung 3 stays the ordinary path and rung 2 is what a person reaches for when the walk lands
+ * somewhere wrong.
+ *
+ * THE WALK IS LOAD-BEARING AND SLIGHTLY LUCKY. Starmind spawns this server with the default project's
+ * root as its working directory, so walking up from cwd finds the checkout — on a machine where the
+ * default project IS the checkout. That is true today and is a coincidence rather than a guarantee, which
+ * is the whole reason rung 2 is worth surfacing.
  *
  * The walk looks for a directory that is a workspace ROOT rather than merely a package: the marker
  * is a `_Claude/` vault beside a `scripts/` folder. A bare `package.json` is the wrong marker here —
