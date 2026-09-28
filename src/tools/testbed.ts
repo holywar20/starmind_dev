@@ -362,7 +362,7 @@ export const Testbed = new class Testbed {
 
 	/**
 	 * The board a run starts from, as one snapshot. Task keys are negative placeholders: `replace` hands out
-	 * the real keys and rewrites every blocker onto them, so the whole board lands in one write.
+	 * the real keys and rewrites every dependency onto them, so the whole board lands in one write.
 	 *
 	 * `agentId` heads every lane; `heads` names the subject for each lane model that differs, by model.
 	 */
@@ -404,13 +404,13 @@ export const Testbed = new class Testbed {
 			const position = inLane.get( lane.id ) ?? 0;
 			inLane.set( lane.id, position + 1 );
 
-			const blockers: Record<string, unknown>[] = [];
+			const dependencies: Record<string, unknown>[] = [];
 			for ( const slug of task.blockedBy ?? [] ) {
 				const waitsOn = keys.get( slug );
 				if ( waitsOn === undefined ) {
 					throw new TestbedError( `The manifest's task "${ task.slug }" is blocked by "${ slug }", which no task is called.` );
 				}
-				blockers.push( { waitsOn, release: 'verified', releaseTarget: '', critical: false, note: '', raisedAt: now } );
+				dependencies.push( { waitsOn, release: 'verified', releaseTarget: '', critical: false, note: '', raisedAt: now } );
 			}
 
 			tasks.push( {
@@ -431,7 +431,7 @@ export const Testbed = new class Testbed {
 				exitCondition: this.fill( task.exitCondition, root ),
 				approval:      task.approval ?? 'self',
 				proofs:        this.stepsOf( task ).map( ( step ) => ( { kind: 'command', target: this.commandFor( step ), satisfied: false, checkedAt: 0 } ) ),
-				blockers,
+				dependencies,
 				grants:        { access: [], policy: [] },
 				stages:        [],
 				estimateMin:   task.estimateMin ?? 5,

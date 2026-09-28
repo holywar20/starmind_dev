@@ -51,14 +51,14 @@ describe( 'the test bed manifest', () => {
 
 describe( 'the board a run starts from', () => {
 
-	it( 'lays every task on its lane with placeholder keys and blockers pointing at them', () => {
+	it( 'lays every task on its lane with placeholder keys and dependencies pointing at them', () => {
 		const board = Testbed.board( manifest(), 'C:\\tb', 'agent-1', [ 'inside' ] ) as { lanes: Record<string, unknown>[]; tasks: Record<string, unknown>[] };
 		const first  = board.tasks.find( ( t ) => ( t[ 'name' ] as { slug: string } ).slug === 'first' )!;
 		const second = board.tasks.find( ( t ) => ( t[ 'name' ] as { slug: string } ).slug === 'second' )!;
 
 		expect( board.tasks ).toHaveLength( 5 );
 		expect( Number( first[ 'id' ] ) ).toBeLessThan( 0 );
-		expect( ( second[ 'blockers' ] as { waitsOn: number }[] )[ 0 ].waitsOn ).toBe( first[ 'id' ] );
+		expect( ( second[ 'dependencies' ] as { waitsOn: number }[] )[ 0 ].waitsOn ).toBe( first[ 'id' ] );
 		expect( second[ 'order' ] ).toBe( 1 );
 		expect( second[ 'approval' ] ).toBe( 'human' );
 		expect( ( first[ 'proofs' ] as { target: string }[] )[ 0 ].target ).toBe( 'check_3a' );
@@ -71,7 +71,7 @@ describe( 'the board a run starts from', () => {
 		expect( ( board.lanes[ 1 ][ 'head' ] as { ref: string } ).ref ).toBe( 'agent-1' );
 	} );
 
-	it( 'refuses a blocker naming a task that does not exist', () => {
+	it( 'refuses a dependency naming a task that does not exist', () => {
 		const broken = manifest();
 		broken.lanes[ 0 ].tasks![ 1 ].blockedBy = [ 'nobody' ];
 		expect( () => Testbed.board( broken, 'C:\\tb', 'agent-1', [] ) ).toThrow( /nobody/ );
