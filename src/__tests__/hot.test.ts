@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { Agent, type SerializedAgent } from '@kcd/core';
 
 import { hotTools } from '../tools/hot';
@@ -866,5 +868,76 @@ describe( 'the hot tools', () => {
 		expect( text ).toContain( 'app-down' );
 		// And it must NOT read as a finding about Starmind.
 		expect( text ).not.toContain( 'unrouted' );
+	} );
+
+	// ── THE SUPERVISOR LOG ( DEFECT-137 ). `app-down` has five causes and this side can tell none of them
+	// apart, so the reply's job is to hand over the one instrument that can. The log already existed; the
+	// refusal that produces the question did not point at it, and an agent guessed instead.
+	//
+	// This test needs NO running app, which is the point — the fix must be provable while the thing it
+	// describes is broken.
+	it( 'names the supervisor log for the port it tried, without stat-ing it', async () => {
+		await app.stop();
+		process.env[ 'STARMIND_DEV_PORT' ] = '1';          // nothing listens on port 1
+		const text = await refusal( 'list_sessions' );
+		// The absolute path, for the port actually tried. Derived here rather than written out — a literal
+		// would pass on one machine and on no other. THREE hops, not two: this file sits one level deeper
+		// than `Door.ts`, which joins from `src/`.
+		const expected = join( __dirname, '..', '..', '..', 'starmind', 'scripts', 'dev', '.supervisor-1.log' );
+		expect( text ).toContain( expected );
+		// It points at evidence and adjudicates nothing: no claim in either direction about the app.
+		expect( text ).toContain( 'Read it before concluding the app is down' );
+	} );
+
+	// ── THE BOOT NOTE ( TASK-153 ). The supervisor log turned a five-cause guess into a one-file read;
+	// this turns it into a one-line answer. The unit matrix lives in `bootnote.test.ts` because it needs
+	// neither a disk nor an app; what is proved HERE is only that the wire is connected — that a refusal
+	// produced by the real Door, through the real tool, carries the app's own words.
+	//
+	// The note is planted where the app would have written it, keyed on the port actually dialled, so the
+	// case is deterministic on a machine that has or has not run a dev session.
+	it( 'quotes the app\'s own refusal when a boot note is there to read', async () => {
+		await app.stop();
+		process.env[ 'STARMIND_DEV_PORT' ] = '1';          // nothing listens on port 1
+		const note = join( __dirname, '..', '..', '..', 'starmind', 'scripts', 'dev', '.dev-boot-1.json' );
+		writeFileSync( note, JSON.stringify( {
+			at: new Date().toISOString(), pid: 4242, packaged: false, door: 'shut',
+			why: 'the switch expired on 2026-09-22',
+			fix: 'Set STARMIND_DEV_DOOR to a date and restart the app.',
+			wantedPort: 1, boundPort: 0, tokenSet: true
+		} ), 'utf8' );
+		try {
+			const text = await refusal( 'list_sessions' );
+			// ONE CAUSE, in the app's words rather than reconstructed out here.
+			// The double sends no `X-Starmind-App` header, so no app stamp has been noted and the staleness
+			// branch cannot fire on the planted pid. Asserted rather than assumed — if the double ever
+			// starts stamping, this says so instead of the quote assertion failing for an unrelated reason.
+			expect( text ).not.toContain( 'STALE' );
+			expect( text ).toContain( 'the switch expired on 2026-09-22' );
+			expect( text ).toContain( 'Set STARMIND_DEV_DOOR to a date and restart the app.' );
+			// And the five-cause paragraph is GONE, because there is now an answer to lay it over.
+			expect( text ).not.toContain( 'IF THIS IS A FRESH CHECKOUT' );
+			// It still refuses to adjudicate the present tense.
+			expect( text ).toContain( 'It does not say whether the app is running now' );
+			expect( text ).toContain( 'NOTHING WAS TESTED' );
+		} finally { rmSync( note, { force: true } ); }
+	} );
+
+	// ── REPORT ERRORS, NOT STATUS ( Bryan, 2026-09-30 ). A call that worked has already proved
+	// everything the note could say. A success that also announced the door state would be a SECOND
+	// authority on a question the reply's own existence answers — and the two can disagree, with the
+	// reassuring one always the one somebody believes.
+	it( 'carries no door state and no health field on a reply that WORKED', async () => {
+		const r = await tools[ 'list_sessions' ]!.handler( {} );
+		expect( r.isError ).not.toBe( true );
+		const text = r.content[ 0 ]!.text!;
+		for ( const leak of [ 'dev-boot', 'boot note', 'BOOT NOTE', 'DEV DOOR', 'STARMIND_DEV_DOOR' ] ) {
+			expect( text, `a successful reply must not mention "${ leak }"` ).not.toContain( leak );
+		}
+		// And no health object grew on the payload: the reply is the call's own answer and nothing else.
+		const body = JSON.parse( text ) as Record<string, unknown>;
+		for ( const field of [ 'door', 'health', 'status', 'up', 'alive' ] ) {
+			expect( body, `a successful reply must not carry a "${ field }" field` ).not.toHaveProperty( field );
+		}
 	} );
 } );

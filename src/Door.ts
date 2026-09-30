@@ -1,4 +1,7 @@
 import { request as httpRequest } from 'http';
+import { join } from 'path';
+
+import { diagnose } from './BootNote';
 
 /**
  * Door — this package's ONE road into a running Starmind.
@@ -23,6 +26,9 @@ import { request as httpRequest } from 'http';
  *
  *   app-down      nothing is listening. The app is not running, or it is running without a fixed
  *                 router port ( plain `npm run dev` ), so the configured address points at nothing.
+ *                 IT NO LONGER GUESSES BETWEEN THOSE: the app writes a BOOT NOTE at every boot and
+ *                 `BootNote.explain` reads it to name ONE cause and its fix. Where there is no note to
+ *                 read, this reply degrades to the paragraph below, unchanged.
  *   no-door       something answered and does not know this path. An app on an older build.
  *   unauthorized  the door is there and the token is missing, stale, or bound to a session rather
  *                 than to the dev principal.
@@ -147,6 +153,45 @@ const DOOR_SWITCH =
 	'opens, as YYYY-MM-DD, today or up to 7 days ahead. It EXPIRES on its own, so a door that worked last ' +
 	'week is shut this week by design. Set it and restart the APP — main-process code does not hot-reload. ' +
 	'A packaged build refuses regardless of the switch.';
+
+/**
+ * WHERE THE SUPERVISOR WROTE DOWN WHAT ACTUALLY HAPPENED — named on every `app-down`, because this reply
+ * is the one that gets diagnosed wrong.
+ *
+ * `app-down` has five documented causes and this side can distinguish none of them. An agent handed it
+ * picks the most likely and escalates with that guess attached, which is how DEFECT-137's parent lost two
+ * rounds to a person: the door was shut by configuration — an ordinary, documented state — and the reply
+ * could only say "nothing is listening".
+ *
+ * `dev-proxied.mjs` already built the instrument that settles it in one read. Its own words: *the terminal
+ * is not a surface anything but a human can read ... this log is the raw twin: the same events, written
+ * somewhere an agent can open for itself.* Nothing pointed at it. The path is the whole gift — the reader
+ * holds file tools.
+ *
+ * ── DERIVED FROM THIS MODULE, NOT FROM THE WORKING DIRECTORY ──
+ *
+ * `dev-proxied.mjs` derives `SENTINEL` and `LOG` from its own module URL and says why: a path that depends
+ * on which shell launched the process goes missing for reasons nobody can see. The same reasoning binds
+ * here, so this joins off `__dirname` rather than `cwd()` or `Workspace.find()` — and off `__dirname`
+ * rather than a walk, because it must cost NO I/O and must answer the same whether or not the file exists.
+ * Under `tsx` this module sits in `starmind_dev/src`, bundled it sits in `starmind_dev/dist`; both are one
+ * level under the package, so two hops up is the checkout in either arrangement.
+ *
+ * ── SAID WHETHER OR NOT THE FILE IS THERE ──
+ *
+ * Deliberately not stat'd. An ABSENT log is itself a finding — no supervised session ever ran on this port
+ * — and it is exactly as useful as a present one. Nothing here claims the app is up: this points at
+ * evidence, it does not adjudicate, because trading one confident wrong answer for another is the defect.
+ */
+function supervisorLogLine( ports: number[] ): string {
+	const where = ports
+		.map( ( port ) => '`' + join( __dirname, '..', '..', 'starmind', 'scripts', 'dev', `.supervisor-${ port }.log` ) + '`' )
+		.join( ', ' );
+	return `THE SUPERVISOR'S OWN LOG is readable at ${ where } — its last block names whether the door was ` +
+		'open and whether the app started. Read it before concluding the app is down. It is named here whether ' +
+		'or not it exists: an absent file means no supervised session ever ran on that port, which is its own ' +
+		'answer. This says nothing about whether the app is running — it points at the evidence.';
+}
 
 /** How long to wait on the app. Generous, because a verb may do real work; well below the MCP client
  *  timeout, because a call that outlives its caller reports its answer to nobody. */
@@ -498,10 +543,33 @@ export const Door = new class Door {
 			return got;
 		}
 
+		return this._appDown( verb, tried, `Nothing is listening on 127.0.0.1 at any of: ${ tried.join( ', ' ) }.` );
+	}
+
+	/**
+	 * THE ONE PLACE AN `app-down` REPLY IS ASSEMBLED. Two sites produce the outcome — a walk that every
+	 * candidate refused, and a socket error that is not a refusal — and they used to write their own
+	 * remedy each. Two copies of a remedy drift, and the copy is always the one somebody reads.
+	 *
+	 * ── THE NOTE DECIDES HOW MUCH HAS TO BE SAID ────────────────────────────────────────────────────
+	 *
+	 * With a boot note there is ONE cause and one fix, quoted from the app itself, and the old paragraph
+	 * naming five possible causes is noise laid over an answer. Without one — no note, or a note this
+	 * cannot parse — the paragraph is still the best available reply, so it comes back. That is what
+	 * "degrade to current behaviour" means here: the fallback is the whole of yesterday's answer, not a
+	 * truncated version of it.
+	 *
+	 * NOTHING IN EITHER BRANCH CLAIMS THE APP IS UP. The note cannot know, and this side certainly
+	 * cannot; where the two disagree, `explain` states both facts and leaves the judgement.
+	 */
+	private _appDown( verb: string, tried: number[], opening: string ): DoorReply {
+		const { cause, certain } = diagnose( tried, this._reached );
+
 		// WHERE THE ADDRESS CAME FROM decides which half of this reply is useful. A CONFIGURED port means
 		// somebody's answer is wrong or the app is down, and the fix is a field on a surface. An unconfigured
 		// one means we guessed, and the reader needs to know that before they go looking for a setting that
-		// was never set. Two different next actions, so they are two different sentences.
+		// was never set. Two different next actions, so they are two different sentences. Only reached for
+		// when no note named a cause — a note that did has already said which of them applies.
 		const set   = this.configured();
 		const where = set !== null
 			? `Port ${ set } is CONFIGURED — it is this server's \`${ PORT_ENV }\` setting, which you can change ` +
@@ -511,12 +579,15 @@ export const Door = new class Door {
 			  'this rig has ever used. Set the port on this server\'s card in Servers & Tools to stop guessing. ' +
 			  'Spawned standalone rather than by Starmind, there is no card — export ' + PORT_ENV + ' instead.';
 
-		return { outcome: 'app-down', verb, detail:
-			`Nothing is listening on 127.0.0.1 at any of: ${ tried.join( ', ' ) }. ${ where } ` +
-			'THE APP\'S OWN HALF IS SEPARATE: it binds what `starmind/.env` sets as STARMIND_ROUTER_PORT, and an ' +
+		const fallback = certain ? '' :
+			' ' + where +
+			' THE APP\'S OWN HALF IS SEPARATE: it binds what `starmind/.env` sets as STARMIND_ROUTER_PORT, and an ' +
 			'unset value means an EPHEMERAL port, which no fixed address can reach — so an app that started fine ' +
 			'can still be unreachable from here, and that is a configuration fact rather than a crash. ' +
-			DOOR_SWITCH + ' NO VERB RAN, so nothing was tested.' };
+			DOOR_SWITCH;
+
+		return { outcome: 'app-down', verb, detail:
+			`${ opening } ${ cause }${ fallback } ${ supervisorLogLine( tried ) } NO VERB RAN, so nothing was tested.` };
 	}
 
 	/**
@@ -585,7 +656,10 @@ export const Door = new class Door {
 			} );
 			req.on( 'error', ( err: NodeJS.ErrnoException ) => {
 				if ( err.code === 'ECONNREFUSED' ) { done( 'refused' ); return; }
-				done( { outcome: 'app-down', verb, detail: `Could not reach 127.0.0.1:${ port }: ${ err.code ?? err.message }. No verb ran.` } );
+				// THROUGH THE SAME ASSEMBLY as the exhausted walk. This site once wrote its own shorter remedy,
+				// which meant an EACCES or an EHOSTUNREACH got a worse answer than a plain refusal for no reason
+				// anybody chose — and it was the copy that never gained the boot note.
+				done( this._appDown( verb, [ port ], `Could not reach 127.0.0.1:${ port }: ${ err.code ?? err.message }.` ) );
 			} );
 			req.end( body );
 		} );
