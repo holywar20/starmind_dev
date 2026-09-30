@@ -18,11 +18,12 @@ const POLL_MS         = 1_000;   // the CEILING on the interval, not the interva
 const HARNESS_FOLDER = 'Harness Agents';
 
 /**
- * The HOT tools — everything that needs a running Starmind.
+ * The tools that need a running Starmind — which, since the suite runners retired on 2026-09-30, is
+ * every tool this server has. See `server.ts` for the remit.
  *
  * These are the nine that used to live INSIDE the application as an in-process tool table. Nothing
  * about what they do has changed; what changed is which side of the process boundary they run on, and
- * that single move is the whole of Arc 1. Re-read the cold-tools header for the other half.
+ * that single move is the whole of Arc 1.
  *
  * ── STILL THIN CALLERS, UNDER A COST THAT WENT UP ───────────────────────────────────────────────
  *
@@ -585,7 +586,7 @@ export function hotTools(): ToolDefinition[] {
 			doc:
 				'THE OTHER HALF OF THE APP. `/dev/verb` reaches the bus, which 11 services serve. The remaining 14 ' +
 				'declare no bus channel and are reachable only here — `kcd_store`, `project_store`, `harness`, ' +
-				'`exec_store`, `constellation`, `debug_screenshot_store` and the rest. Call `list_verbs` for the ' +
+				'`exec_store`, `constellation`, `screenshot_store` and the rest. Call `list_verbs` for the ' +
 				'declared channels and their ops.\n\n' +
 				'NOTHING WAS ADDED TO ANY SERVICE FOR THIS. The pull registry and the gate that validates against ' +
 				'it already existed for the renderer; this speaks the same envelope through the same entry point. A ' +
@@ -722,10 +723,11 @@ export function hotTools(): ToolDefinition[] {
 				'`name` NAMES THE FILE AND OVERWRITES IT. Shots are regenerable churn in an ignored directory, so ' +
 				'nothing accumulates by default — pass different names to keep several from one run. The reply ' +
 				'carries the PATH, not the image: read the file to look at it.\n\n' +
-				'THREE NON-CAPTURES, each a different fact: `busy` ( an interactive capture is open and its overlay ' +
+				'FOUR NON-CAPTURES, each a different fact: `busy` ( an interactive capture is open and its overlay ' +
 				'would be photographed instead ), `no-window` ( the app is up and holds no window — a real finding, ' +
-				'main can outlive its renderer ), `empty-frame` ( the window yielded nothing, usual for a minimized ' +
-				'window and notable otherwise ).',
+				'main can outlive its renderer ), `no-surface` ( the compositor would not yield a surface, usual for ' +
+				'a hidden, minimized or fully occluded window ), `empty-frame` ( the window yielded nothing ). Each ' +
+				'is a VALUE — this op does not throw for any of them.',
 			inputSchema: {
 				type:       'object',
 				properties: {
@@ -738,7 +740,7 @@ export function hotTools(): ToolDefinition[] {
 				// THE WRITE LANE, and not because the door made us. This produces a file, and `write_state` is
 				// where a tool that changes the disk belongs — a capture tool routed through the read lane would
 				// be the exact trap that split those lanes: a name that says it looks, doing something.
-				const reply = await Door.write( 'debug_screenshot_store', 'window', { name: args[ 'name' ] } );
+				const reply = await Door.write( 'screenshot_store', 'window', { name: args[ 'name' ] } );
 				if ( !isOk( reply ) ) return refuse( reply, 'screenshot' );
 				return ok( reply.value );
 			}

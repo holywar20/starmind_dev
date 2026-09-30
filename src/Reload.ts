@@ -24,7 +24,7 @@ import type { ToolDefinition } from './mcp';
  * Everything under `src/` is dropped from the require cache except the machinery currently executing
  * — this module, the server, the entry, and the wire. Editing `Door.ts` or `Surface.ts` should take
  * effect just as much as editing a tool file, so the unit of reload is OUR SOURCE rather than the
- * three tool files. It deliberately does NOT reach `@kcd/core`: that is a dependency being read, not
+ * tool files alone. It deliberately does NOT reach `@kcd/core`: that is a dependency being read, not
  * a surface being authored, and re-evaluating the SDK on every reload would buy nothing.
  *
  * Both module-level caches downstream ( `Workspace._root`, `Surface._map` ) are derived from facts
@@ -74,11 +74,10 @@ export const Reload = new class Reload {
 
 		try {
 			this.purge();
-			const cold   = require( './tools/cold' )   as { coldTools:   () => ToolDefinition[] };
 			const hot    = require( './tools/hot' )    as { hotTools:    () => ToolDefinition[] };
 			const fluent = require( './tools/fluent' ) as { fluentTools: () => ToolDefinition[] };
 
-			return { ok: true, tools: [ ...cold.coldTools(), ...hot.hotTools(), ...fluent.fluentTools() ] };
+			return { ok: true, tools: [ ...hot.hotTools(), ...fluent.fluentTools() ] };
 		} catch ( e ) {
 			// The import error is the whole value here — it is the compile error for the tool someone is
 			// mid-way through writing, and it is the only place they will see it.

@@ -28,6 +28,9 @@ import { request as httpRequest } from 'http';
  *                 than to the dev principal.
  *   unrouted      the app is up, the door works, and no service serves that channel.
  *
+ * A DOOR SHUT BY ITS SWITCH wears whichever of the first three fits — see `DOOR_SWITCH` below, which is
+ * why all three name it. It is the ordinary state of a fresh checkout, not an exotic one.
+ *
  * Folding those into "error" is the recurring defect this plan is written around, arriving at the
  * seam most likely to hit it: four different things to go and fix, reported as one. Each carries its
  * own fix in words, because the reader is a program or an agent about to retry, and what it needs to
@@ -125,6 +128,25 @@ const TOKEN_ENV = 'STARMIND_DEV_TOKEN';
  */
 const PORT_ENV     = 'STARMIND_DEV_PORT';
 const PUBLIC_PORT  = 51789;
+
+/**
+ * THE DOOR IS SHUT BY DEFAULT, and this sentence is why every unreachable outcome carries it.
+ *
+ * Ruled 2026-09-29: the app refuses the dev lane unless `STARMIND_DEV_DOOR` in `starmind/.env` names a
+ * date — the last day it opens — and that date is today or inside a one-week window. Absent, expired or
+ * dated too far ahead, the app binds no dev principal and no fixed port, so from OUT HERE a shut door is
+ * indistinguishable from an app that is down, on an old build, or holding a different token.
+ *
+ * WHICH IS EXACTLY WHY IT RIDES ALL THREE. A closed-by-default door is going to surprise somebody the
+ * first week, and this package cannot tell which of the three shapes it produced — so rather than guess,
+ * every reply that means "never reached" names the switch. One extra sentence against a lost afternoon.
+ */
+const DOOR_SWITCH =
+	'IF THIS IS A FRESH CHECKOUT, THE DEV DOOR IS SHUT BY DEFAULT ( ruled 2026-09-29 ): the app binds no ' +
+	'dev principal and no fixed port unless STARMIND_DEV_DOOR in `starmind/.env` names the last day it ' +
+	'opens, as YYYY-MM-DD, today or up to 7 days ahead. It EXPIRES on its own, so a door that worked last ' +
+	'week is shut this week by design. Set it and restart the APP — main-process code does not hot-reload. ' +
+	'A packaged build refuses regardless of the switch.';
 
 /** How long to wait on the app. Generous, because a verb may do real work; well below the MCP client
  *  timeout, because a call that outlives its caller reports its answer to nobody. */
@@ -411,14 +433,14 @@ export const Door = new class Door {
 				'the environment that started the MCP client, and nothing keeps them in step. Compare those ' +
 				'two. Either is also STALE-able — the app reads its copy once at startup, so a value edited ' +
 				'since then will not match until the app restarts, and this side is fixed at spawn. ' +
-				'The remaining case is a token bound to a session rather than to the dev principal.' };
+				'The remaining case is a token bound to a session rather than to the dev principal. ' + DOOR_SWITCH };
 		}
 		if ( raw.status === 404 ) {
 			return { outcome: 'no-door', verb, detail:
 				`Something is listening on ${ this.url } and does not serve /dev/${ op }. Most likely an app ` +
 				'running a build from before the door existed — main-process code does not hot-reload, so this ' +
 				'needs a full restart rather than an HMR pass. A 404 is ALSO what a non-dev caller gets, ' +
-				'deliberately: the class refusal is made indistinguishable from an unknown path.' };
+				'deliberately: the class refusal is made indistinguishable from an unknown path. ' + DOOR_SWITCH };
 		}
 		if ( raw.status !== 200 ) {
 			return { outcome: 'malformed', verb, detail: `The door answered ${ raw.status }: ${ raw.text.slice( 0, 200 ) }` };
@@ -494,7 +516,7 @@ export const Door = new class Door {
 			'THE APP\'S OWN HALF IS SEPARATE: it binds what `starmind/.env` sets as STARMIND_ROUTER_PORT, and an ' +
 			'unset value means an EPHEMERAL port, which no fixed address can reach — so an app that started fine ' +
 			'can still be unreachable from here, and that is a configuration fact rather than a crash. ' +
-			'NO VERB RAN, so nothing was tested.' };
+			DOOR_SWITCH + ' NO VERB RAN, so nothing was tested.' };
 	}
 
 	/**

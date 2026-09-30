@@ -23,7 +23,7 @@ function resolveIn( rows: Record<string, unknown>[], ref: string ): unknown {
  * pin — an empty session versus a missing one, a null turn count versus zero, a policy stamp landing
  * on one run and not another — are properties of the TOOLS, and the tools did not stop existing when
  * they changed process. Deleting the table without moving these would have quietly traded ten
- * behavioural tests for nothing and left `test_census` reporting this package as having no suite.
+ * behavioural tests for nothing and left this package looking as though it had no suite at all.
  *
  * Two of the originals did NOT come across, and their absence is a ruling rather than an oversight.
  * They asserted that every tool declares a permission gate and that ungoverned is stated as
@@ -87,7 +87,14 @@ describe( 'the hot tools', () => {
 			] } ] } )
 			.pull( 'kcd_store',     { reads: [ 'catalog', 'quiet' ], writes: [ 'save' ], fn: ( a ) => ( a ? { asked: a } : undefined ) } )
 			.pull( 'project_store', { reads: [ 'list' ], writes: [ 'create' ], armed: false } )
-			.pull( 'debug_screenshot_store', { reads: [], writes: [ 'capture', 'window' ], fn: ( a ) => (
+			// THE CHANNEL ID IS PART OF THE SHAPE ( fixed 2026-09-30 ). This fixture stood under
+			// `debug_screenshot_store` for a week after the service renamed itself `screenshot_store` — it
+			// left the debug package on 2026-09-23 — so the double answered a name the application no longer
+			// served, the tool asked for that name against the real app, and every live capture came back
+			// `unregistered` while this test stayed green. Exactly the sin the note at the top of this block
+			// warns about, committed on the id rather than on the payload: a double easier to satisfy than
+			// the real thing. Keep this string equal to the `screenshot_store` key in PullChannels.ts.
+			.pull( 'screenshot_store', { reads: [], writes: [ 'capture', 'window' ], fn: ( a ) => (
 				( a as { name?: string } )?.name === 'nowindow'
 					? { captured: false, why: 'no-window', detail: 'main outlived its renderer' }
 					: { captured: true, filePath: 'C:/v/_Claude/work/debug/AI/screenshots/latest.png', width: 1600, height: 900,
@@ -453,7 +460,7 @@ describe( 'the hot tools', () => {
 
 		expect( out[ 'captured' ] ).toBe( true );
 		expect( out[ 'uniform' ] ).toBe( false );
-		expect( app.asked.at( -1 ) ).toMatchObject( { verb: 'debug_screenshot_store.window', mode: 'pull' } );
+		expect( app.asked.at( -1 ) ).toMatchObject( { verb: 'screenshot_store.window', mode: 'pull' } );
 	} );
 
 	// A non-capture is a VALUE, not an error. "The app holds no window" is a finding about the app worth
@@ -579,7 +586,7 @@ describe( 'the hot tools', () => {
 
 		/** A row wide enough that dropping columns is visible, standing in for a roster entry. */
 		function fatRow( key: string ): Record<string, unknown> {
-			return { key, label: key.toUpperCase(), tier: 'remote', status: 'ready', doc: 'D'.repeat( 400 ), config: { a: 1 }, rootContextText: 'R'.repeat( 4_000 ) };
+			return { key, label: key.toUpperCase(), tier: 'remote', status: 'ready', doc: 'D'.repeat( 400 ), config: { a: 1 }, notes: 'R'.repeat( 4_000 ) };
 		}
 
 		beforeEach( () => {
@@ -599,7 +606,7 @@ describe( 'the hot tools', () => {
 
 		it( 'names every field that was on offer, so one wide call teaches the narrow one', async () => {
 			const wide = await json( 'read_state', { channel: 'models', op: 'roster' } );
-			expect( wide[ 'keys' ] ).toContain( 'rootContextText' );
+			expect( wide[ 'keys' ] ).toContain( 'notes' );
 			expect( wide[ 'keys' ] ).toContain( 'key' );
 			// Discoverability is NOT conditional on asking for it: an agent that did not know a read was
 			// expensive finds out on the call it already made, not on a second one it has no reason to make.

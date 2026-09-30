@@ -1,13 +1,19 @@
-import { existsSync, readdirSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 
 /**
- * Workspace — where the tree under test is, and what is in it.
+ * Workspace — which checkout this process is pointed at.
  *
- * Every COLD tool needs one fact before it can do anything: the workspace root. The HOT tools will
- * not — they ask a running application, which knows its own project. So this is the cold half's
- * single piece of orientation, and it is worth being fussy about because getting it wrong means a
- * tool that reports confidently about the wrong directory.
+ * ONE FACT AND ONE CALLER, since 2026-09-30. The tools ask a running application, which knows its own
+ * project, so none of them needs this — what needs it is `server.ts`, which announces the resolved
+ * root on stderr at startup. That announcement is the only report anybody gets of where the walk and
+ * `STARMIND_DEV_ROOT` actually landed, and a server pointed at the wrong checkout looks identical
+ * from the client's side, so it is worth being fussy about.
+ *
+ * THE CENSUS HALF STOOD HERE UNTIL 2026-09-30 — `subProjects`, `testFiles` and `packageJson`, the
+ * inputs `test_census` and `run_suite` read the tree with. Both tools retired to `testing_vitest`
+ * ( see `server.ts` ), and these three had no other caller, so they went with them rather than
+ * staying as a tree-reading facility nothing reads.
  *
  * RESOLUTION ORDER, most explicit first:
  *
@@ -15,31 +21,32 @@ import { dirname, join, resolve } from 'path';
  *   2. `STARMIND_DEV_ROOT`              — a DECLARED SETTING, answered on this server's card
  *   3. walk UP from cwd                 — the ordinary case
  *
- * RUNG 2 IS NOW A FIELD, and the order did not have to change to make it one. It is declared in this
+ * RUNG 2 IS A FIELD, and the order did not have to change to make it one. It is declared in this
  * server's manifest with NO DEFAULT, deliberately: a field that declares one resolves to it and the
  * variable is always present, which would retire the walk for everybody to serve the few machines that
  * need a fixed answer. Declaring no default means the variable appears only when somebody actually fills
  * it in, so rung 3 stays the ordinary path and rung 2 is what a person reaches for when the walk lands
  * somewhere wrong.
  *
- * THE WALK IS LOAD-BEARING AND SLIGHTLY LUCKY. Starmind spawns this server with the default project's
- * root as its working directory, so walking up from cwd finds the checkout — on a machine where the
- * default project IS the checkout. That is true today and is a coincidence rather than a guarantee, which
- * is the whole reason rung 2 is worth surfacing.
+ * THE WALK IS SLIGHTLY LUCKY. Starmind spawns this server with the default project's root as its
+ * working directory, so walking up from cwd finds the checkout — on a machine where the default
+ * project IS the checkout. That is true today and is a coincidence rather than a guarantee, which is
+ * the whole reason rung 2 is worth surfacing.
  *
  * The walk looks for a directory that is a workspace ROOT rather than merely a package: the marker
  * is a `_Claude/` vault beside a `scripts/` folder. A bare `package.json` is the wrong marker here —
  * every sub-project has one, so a server started from inside `kcd_sdk/` would stop at `kcd_sdk/` and
- * every census it took would describe one fifth of the tree while looking complete.
+ * announce one fifth of the tree while looking complete.
  *
- * NOT FINDING A ROOT IS AN ANSWER, NOT A CRASH. `find()` returns null and each tool reports it in
- * its own words. A test rig that throws on startup because it was launched from an unexpected
- * directory is a rig nobody can debug — the whole point of the cold half is that it works in
+ * NOT FINDING A ROOT IS AN ANSWER, NOT A CRASH. `find()` returns null and the caller says so in its
+ * own words — `server.ts` announces `( none found )`. A test rig that throws on startup because it was
+ * launched from an unexpected directory is a rig nobody can debug, and a rig is wanted most in
  * awkward circumstances.
  */
 export class Workspace {
 
-	/** Cached because every tool call would otherwise re-walk the filesystem for the same answer. */
+	/** Cached because the answer cannot change inside one process — a long-lived server never
+	 *  legitimately moves workspace, so the walk is worth doing exactly once. */
 	private static _root: string | null | undefined = undefined;
 
 	/** The workspace root, or null when this process is not inside one. */
@@ -47,11 +54,6 @@ export class Workspace {
 		if ( this._root !== undefined ) return this._root;
 		this._root = this._resolve();
 		return this._root;
-	}
-
-	/** Clear the cache. Tests only — a long-lived server never legitimately changes workspace. */
-	static reset(): void {
-		this._root = undefined;
 	}
 
 	private static _resolve(): string | null {
@@ -76,71 +78,5 @@ export class Workspace {
 	 *  ambiguous — a deployed vault can sit beside things that are not this repo. */
 	static isRoot( dir: string ): boolean {
 		return existsSync( join( dir, '_Claude' ) ) && existsSync( join( dir, 'scripts' ) );
-	}
-
-	// ── The census inputs ─────────────────────────────────────────────────────────
-
-	/**
-	 * Sub-projects: directories with a `package.json`, two levels deep, skipping build output.
-	 *
-	 * DELIBERATELY MIRRORS `scripts/test-all.mjs` rather than importing it — that file is an ESM script
-	 * with top-level side effects ( it RUNS the suites ), so importing it would run them. The duplication
-	 * is real and is the smaller cost. If these two ever disagree the census is the one that is wrong,
-	 * because the aggregator is what actually executes.
-	 */
-	static subProjects( root: string ): string[] {
-		const NEVER = new Set( [ 'node_modules', '.git', 'dist', 'out', 'build', '.vite' ] );
-		const found: string[] = [];
-
-		const walk = ( dir: string, depth: number ): void => {
-			if ( depth < 0 ) return;
-			let entries;
-			try { entries = readdirSync( dir, { withFileTypes: true } ); }
-			catch { return; }
-
-			for ( const entry of entries ) {
-				if ( !entry.isDirectory() )         continue;
-				if ( NEVER.has( entry.name ) )      continue;
-				if ( entry.name.startsWith( '.' ) ) continue;
-
-				const child = join( dir, entry.name );
-				if ( existsSync( join( child, 'package.json' ) ) ) found.push( child );
-				walk( child, depth - 1 );
-			}
-		};
-
-		walk( root, 1 );
-		return found.sort();
-	}
-
-	/** Every `*.test.ts` under a directory, excluding build output. The census counts these; nothing
-	 *  here reads them, which is the line between the mechanical half and the judgment half. */
-	static testFiles( dir: string ): string[] {
-		const NEVER = new Set( [ 'node_modules', '.git', 'dist', 'out', 'build', '.vite' ] );
-		const found: string[] = [];
-
-		const walk = ( at: string ): void => {
-			let entries;
-			try { entries = readdirSync( at, { withFileTypes: true } ); }
-			catch { return; }
-			for ( const entry of entries ) {
-				const child = join( at, entry.name );
-				if ( entry.isDirectory() ) {
-					if ( NEVER.has( entry.name ) || entry.name.startsWith( '.' ) ) continue;
-					walk( child );
-				}
-				else if ( entry.name.endsWith( '.test.ts' ) ) found.push( child );
-			}
-		};
-
-		walk( dir );
-		return found;
-	}
-
-	/** A package.json as a plain object, or null. A malformed one is reported by the caller rather than
-	 *  thrown on — one unparseable file must not take a whole census down with it. */
-	static packageJson( dir: string ): Record<string, unknown> | null {
-		try { return JSON.parse( readFileSync( join( dir, 'package.json' ), 'utf8' ) ) as Record<string, unknown>; }
-		catch { return null; }
 	}
 }

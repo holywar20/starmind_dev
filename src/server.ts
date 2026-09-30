@@ -2,37 +2,39 @@ import { McpServer } from './mcp';
 import type { ToolDefinition } from './mcp';
 import { Workspace } from './Workspace';
 import { Reload } from './Reload';
-import { coldTools } from './tools/cold';
 import { hotTools } from './tools/hot';
 import { fluentTools } from './tools/fluent';
 
 /**
  * StarmindDevServer — the internal testing surface, as a server that owns its own process.
  *
- * ── WHAT CHANGED, AND WHY IT MATTERS ────────────────────────────────────────────────────────────
+ * ── THE REMIT ───────────────────────────────────────────────────────────────────────────────────
  *
- * This surface used to be a tenant of the running application: an in-process tool table armed by
- * Starmind's MCPService and reached over the app's own loopback router. That shape had one defect
- * that no amount of tidying fixes — it could not exist without the thing it exists to test. Every
- * tool on it, including the ones that only read, was unavailable whenever Starmind was down, which
- * is precisely when a cold suite, a CI run, or a first-boot check would want them.
+ * Reaching INTO a running Starmind, plus the testbed. Every tool here needs the application: it
+ * dials the dev door, drives a turn, reads the pull lane, or stands a taskboard test run up and
+ * reads it back. Nothing here runs a test suite, and nothing here reads the source tree on its own.
  *
- * So the dependency is inverted. This is a standalone server that reaches INTO the application
- * when the application happens to be running, and does useful work when it is not.
+ * WHY IT IS A SEPARATE PROCESS ANYWAY, now that "it works with no app" is no longer the answer. It
+ * must not be governed by the system it measures, and it must not ship — both below, and both are
+ * properties of standing outside rather than of working offline. A tenant of the app could have
+ * neither.
  *
- * ── TWO CLASSES OF TOOL ─────────────────────────────────────────────────────────────────────────
+ * THE SEAM IS A REPLY, NOT AN EXCEPTION. A tool that cannot reach the app answers with a named
+ * outcome — app-down, no-door, unauthorized, unrouted — saying plainly that nothing was tested; see
+ * `Door`. The alternative, a server that fails to start or hides its tools when Starmind is down,
+ * would take them away at exactly the moment someone is diagnosing why it is down.
  *
- *   COLD  needs no application. Runs suites, takes the census, reads the tree.
- *   HOT   needs the application. Spawns agents, reads policies, injects declared IPC crossings.
+ * ── RUNNING THE SUITES IS NOT HERE ANY MORE ─────────────────────────────────────────────────────
  *
- * The split is the architecture rather than a labelling exercise, and it was built in that order on
- * purpose: the cold tools depend on nothing in the attach seam, so they proved the package genuinely
- * stands up alone before anything was built that assumed it does.
+ * `run_suite` and `test_census` stood here until 2026-09-30 and are retired. The test-running
+ * capability belongs to `testing_vitest`, in-app, where a run is scoped to a path, checked against
+ * an allow-list, and rate-capped — none of which a tool out here could offer. Ruled by Bryan
+ * 2026-09-29: they are DROPPED rather than kept beside it, because two doors onto "run the tests"
+ * is a fork, and the un-surfaced one drifts while remaining the copy somebody reads.
  *
- * BOTH HALVES NOW EXIST, and the seam between them is a REPLY, not an exception. A hot tool that
- * cannot reach the app answers with a named outcome saying so and stating that nothing was tested —
- * see `Door`. The alternative, a server that fails to start or hides its hot tools when Starmind is
- * down, would take the tools away at exactly the moment someone is diagnosing why it is down.
+ * THE COST WAS NAMED AND ACCEPTED, and is written here so nobody rediscovers it as a surprise: those
+ * two tools worked with NO Starmind running and were reachable from bare Claude Code over
+ * `.mcp.json`. Running the suites now needs the app up. That is a real loss, taken deliberately.
  *
  * ── NOT GOVERNED, AND NOT SHIPPED ───────────────────────────────────────────────────────────────
  *
@@ -69,8 +71,8 @@ export class StarmindDevServer {
 	/**
 	 * `reload_tools` — the push lane's trigger, and the ONE tool deliberately outside the reloadable set.
 	 *
-	 * It is registered here rather than in `cold.ts` so that the ability to reload cannot be destroyed by
-	 * a bad reload. `Reload` is already transactional, so a broken module leaves the old table standing
+	 * It is registered here rather than in a tool module so that the ability to reload cannot be destroyed
+	 * by a bad reload. `Reload` is already transactional, so a broken module leaves the old table standing
 	 * and this tool would survive regardless — keeping it out of the set makes that structural instead of
 	 * incidental, which matters because the moment it is needed most is the moment someone has just
 	 * broken a tool module.
@@ -84,7 +86,7 @@ export class StarmindDevServer {
 				'THE TWO-STEP BUILD, COLLAPSED. Write a tool, call this, use it. Previously a new tool needed a ' +
 				'client restart, which cost the session.\n\n' +
 				'WHAT IT ACTUALLY DOES, because three separate things were frozen and only all three together ' +
-				'help: it re-evaluates `tools/cold.ts`, `tools/hot.ts` and `tools/fluent.ts` through a fresh ' +
+				'help: it re-evaluates `tools/hot.ts` and `tools/fluent.ts` through a fresh ' +
 				'module registry ( the plain module cache would hand back the same closures ), swaps the whole ' +
 				'table ( so a DELETED tool actually disappears ), and sends `notifications/tools/list_changed` ' +
 				'if — and only if — the roster a client can see is genuinely different.\n\n' +
@@ -127,29 +129,28 @@ export class StarmindDevServer {
 	}
 
 	/**
-	 * The full tool table — the RELOADABLE set. `reload_tools` re-evaluates exactly these three modules
+	 * The full tool table — the RELOADABLE set. `reload_tools` re-evaluates exactly these two modules
 	 * and is registered separately, outside them.
 	 *
-	 * The hot half APPENDS here rather than forking a second server — one process, one tool list, with
-	 * the cold/hot distinction living in whether a tool needs the door. A caller should not have to know
-	 * which of two servers to ask; it should ask, and be told plainly when the application is not
-	 * running. Registered UNCONDITIONALLY, without probing for the app first: a table that changed shape
-	 * depending on whether Starmind happened to be up would make an absent tool and an absent app the
-	 * same observation.
+	 * ONE PROCESS, ONE TOOL LIST. A caller should not have to know which of two servers to ask; it
+	 * should ask, and be told plainly when the application is not running. Registered UNCONDITIONALLY,
+	 * without probing for the app first: a table that changed shape depending on whether Starmind
+	 * happened to be up would make an absent tool and an absent app the same observation.
 	 *
-	 * That last point USED to rest on "the client only reads this list once anyway". It no longer does,
-	 * and the argument is stronger without it: the roster should describe what this server offers, never
+	 * That point USED to rest on "the client only reads this list once anyway". It no longer does, and
+	 * the argument is stronger without it: the roster should describe what this server offers, never
 	 * what some other process is currently doing.
 	 */
 	private tools(): ToolDefinition[] {
-		return [ ...coldTools(), ...hotTools(), ...fluentTools() ];
+		return [ ...hotTools(), ...fluentTools() ];
 	}
 
 	/** Start serving on stdio. Resolves when the client disconnects. */
 	async run(): Promise<void> {
 		// Announced on stderr, never stdout — stdout is the JSON-RPC channel and one stray line on it
-		// corrupts the stream for the whole session. The root is worth announcing because "which tree
-		// am I describing" is the single question a wrong answer from a cold tool comes down to.
+		// corrupts the stream for the whole session. The root is worth announcing because it is the one
+		// fact about this process that nothing else reports: it is where `STARMIND_DEV_ROOT` and the walk
+		// landed, and a server pointed at the wrong checkout looks identical from the client's side.
 		const root = Workspace.find();
 		process.stderr.write( `starmind_dev: serving. workspace root: ${ root ?? '( none found )' }\n` );
 		await this.mcp.connect();

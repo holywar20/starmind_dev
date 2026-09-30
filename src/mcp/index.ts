@@ -21,8 +21,8 @@
  *    nothing here for the discovery pass to find.
  *
  *  • `verify.ts` — the TestSpec harness. Wanted eventually, but it belongs beside tools that
- *    have assertions worth running, and the cold tools land first. Adding it now would be
- *    vendoring a harness for specs nobody has written.
+ *    have assertions worth running. Adding it now would be vendoring a harness for specs
+ *    nobody has written.
  */
 export { McpServer } from './McpServer';
 export type { ContentBlock, ToolResult, ToolAnnotations, ToolDefinition, ServerInfo } from './McpServer';
