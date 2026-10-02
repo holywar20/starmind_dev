@@ -2,6 +2,7 @@ import { request as httpRequest } from 'http';
 import { join } from 'path';
 
 import { diagnose } from './BootNote';
+import { Workspace } from './Workspace';
 
 /**
  * Door — this package's ONE road into a running Starmind.
@@ -138,10 +139,16 @@ const PUBLIC_PORT  = 51789;
 /**
  * THE DOOR IS SHUT BY DEFAULT, and this sentence is why every unreachable outcome carries it.
  *
- * Ruled 2026-09-29: the app refuses the dev lane unless `STARMIND_DEV_DOOR` in `starmind/.env` names a
- * date — the last day it opens — and that date is today or inside a one-week window. Absent, expired or
- * dated too far ahead, the app binds no dev principal and no fixed port, so from OUT HERE a shut door is
- * indistinguishable from an app that is down, on an old build, or holding a different token.
+ * Ruled 2026-09-29 and AMENDED 2026-10-02: the app refuses the dev lane unless `STARMIND_DEV_DOOR` in
+ * `starmind/.env` is set to something — any non-empty value opens it, and unset leaves it shut. Unset, the
+ * app binds no dev principal and no fixed port, so from OUT HERE a shut door is indistinguishable from an
+ * app that is down, on an old build, or holding a different token.
+ *
+ * THE DATE IS GONE. The switch used to name the last day it opened, inside a one-week window, and the
+ * expiry is what the amendment retired — the reasoning and the control traded away are written up above
+ * `DEV_DOOR_ENV` in `starmind/src/main/services/DevLane.ts`, which is the one place they live. This copy
+ * moved with it because it is ADVICE and a stale remedy sends a reader to do a thing that no longer
+ * applies: it rides every unreachable reply, which is exactly where somebody acts on it.
  *
  * WHICH IS EXACTLY WHY IT RIDES ALL THREE. A closed-by-default door is going to surprise somebody the
  * first week, and this package cannot tell which of the three shapes it produced — so rather than guess,
@@ -149,9 +156,9 @@ const PUBLIC_PORT  = 51789;
  */
 const DOOR_SWITCH =
 	'IF THIS IS A FRESH CHECKOUT, THE DEV DOOR IS SHUT BY DEFAULT ( ruled 2026-09-29 ): the app binds no ' +
-	'dev principal and no fixed port unless STARMIND_DEV_DOOR in `starmind/.env` names the last day it ' +
-	'opens, as YYYY-MM-DD, today or up to 7 days ahead. It EXPIRES on its own, so a door that worked last ' +
-	'week is shut this week by design. Set it and restart the APP — main-process code does not hot-reload. ' +
+	'dev principal and no fixed port unless STARMIND_DEV_DOOR in `starmind/.env` is set. ANY non-empty ' +
+	'value opens it — STARMIND_DEV_DOOR=1 will do, and a leftover date string works too. Set it and ' +
+	'restart the APP — main-process code does not hot-reload. It stays open until somebody unsets it. ' +
 	'A packaged build refuses regardless of the switch.';
 
 /**
@@ -168,24 +175,41 @@ const DOOR_SWITCH =
  * somewhere an agent can open for itself.* Nothing pointed at it. The path is the whole gift — the reader
  * holds file tools.
  *
- * ── DERIVED FROM THIS MODULE, NOT FROM THE WORKING DIRECTORY ──
+ * ── ADDRESSED AGAINST THE TARGETED CHECKOUT, WHICH IT WAS NOT UNTIL DEFECT-252 ──
  *
- * `dev-proxied.mjs` derives `SENTINEL` and `LOG` from its own module URL and says why: a path that depends
- * on which shell launched the process goes missing for reasons nobody can see. The same reasoning binds
- * here, so this joins off `__dirname` rather than `cwd()` or `Workspace.find()` — and off `__dirname`
- * rather than a walk, because it must cost NO I/O and must answer the same whether or not the file exists.
- * Under `tsx` this module sits in `starmind_dev/src`, bundled it sits in `starmind_dev/dist`; both are one
- * level under the package, so two hops up is the checkout in either arrangement.
+ * This joined off `__dirname` with two hops up, and the doc-block here argued for it: `dev-proxied.mjs`
+ * derives its own `SENTINEL` and `LOG` from its module URL because a path that depends on which shell
+ * launched the process goes missing for reasons nobody can see, and this had to cost NO I/O besides.
+ *
+ * Both halves of that were true of the WRITER and false of the READER. `dev-proxied.mjs` writes the log
+ * from inside the checkout, so its own module IS the right anchor. This runs wherever the rig happens to
+ * be installed — under `C:\Program Files\...` in the ordinary case — so two hops up from here named a
+ * folder in the install tree that no supervisor has ever written to, on the one reply that gets diagnosed
+ * wrong. A free address that is wrong is not cheaper than a correct one.
+ *
+ * So it asks `Workspace.devScriptsDir()`, the same answer `server.ts` announced at startup and the same
+ * one the boot note is read from. The I/O objection survives in practice: `Workspace.find()` caches, and
+ * the announcement already spent it.
  *
  * ── SAID WHETHER OR NOT THE FILE IS THERE ──
  *
  * Deliberately not stat'd. An ABSENT log is itself a finding — no supervised session ever ran on this port
  * — and it is exactly as useful as a present one. Nothing here claims the app is up: this points at
  * evidence, it does not adjudicate, because trading one confident wrong answer for another is the defect.
+ *
+ * NO CHECKOUT IS A DIFFERENT SENTENCE, not a path with a hole in it. Naming an address that was never
+ * resolved is how the absent-note reply came to assert a finding about the app from a fault in the rig.
  */
 function supervisorLogLine( ports: number[] ): string {
+	const dir = Workspace.devScriptsDir();
+	if ( dir === null ) {
+		return 'THE SUPERVISOR\'S OWN LOG would settle this in one read, and this rig cannot say where it is: ' +
+			'no checkout was resolved, so there is no `<checkout>/starmind/scripts/dev/.supervisor-<port>.log` ' +
+			'to name. That is a fact about this rig, not about the app. Set STARMIND_DEV_ROOT to the checkout ' +
+			'on this server\'s card in Servers & Tools, or export it when running standalone.';
+	}
 	const where = ports
-		.map( ( port ) => '`' + join( __dirname, '..', '..', 'starmind', 'scripts', 'dev', `.supervisor-${ port }.log` ) + '`' )
+		.map( ( port ) => '`' + join( dir, `.supervisor-${ port }.log` ) + '`' )
 		.join( ', ' );
 	return `THE SUPERVISOR'S OWN LOG is readable at ${ where } — its last block names whether the door was ` +
 		'open and whether the app started. Read it before concluding the app is down. It is named here whether ' +

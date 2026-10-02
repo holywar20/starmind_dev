@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import type { AppStamp } from './Door';
+import { Workspace } from './Workspace';
 
 /**
  * THE BOOT NOTE, READ FROM OUT HERE — the app's own account of what it did with the dev lane.
@@ -60,7 +61,13 @@ export interface BootNote {
 export type NoteRead =
 	| { state: 'absent';     path: string }
 	| { state: 'unreadable'; path: string; why: string }
-	| { state: 'read';       path: string; note: BootNote };
+	| { state: 'read';       path: string; note: BootNote }
+	/** FOUR STATES SINCE DEFECT-252, and the fourth carries no `path` because there is none — the rig
+	 *  could not work out which checkout to look in. It is deliberately not an `absent` with a guessed
+	 *  path: that is how the old answer managed to report "no dev session has booted here" about a folder
+	 *  no app has ever written to. The missing field is what stops a reader naming an address it does
+	 *  not have. */
+	| { state: 'unlocated' };
 
 /**
  * A named cause, and whether it is one.
@@ -76,25 +83,37 @@ export interface Diagnosis {
 }
 
 /**
- * Where the notes are, derived from THIS MODULE rather than from the working directory.
+ * Where the notes are: the TARGETED CHECKOUT's dev-scripts folder, which is the one answer
+ * `Workspace` resolves and `server.ts` announces.
  *
- * Same reasoning and same two hops as `Door`'s supervisor-log line, and for the same reason
- * `dev-proxied.mjs` gives: a path that depends on which shell launched the process goes missing for
- * reasons nobody can see. Under `tsx` this module sits in `starmind_dev/src`, bundled in
- * `starmind_dev/dist`; both are one level under the package, so two hops up is the checkout.
+ * ── IT USED TO BE DERIVED FROM THIS MODULE, AND THAT WAS DEFECT-252 ──
+ *
+ * This joined `__dirname` with two hops up, arguing — correctly — that a path depending on which shell
+ * launched the process goes missing for reasons nobody can see. The conclusion did not follow. Two hops
+ * up from this module is the checkout only while the rig RUNS FROM the checkout it targets; installed
+ * under `C:\Program Files\starmind\resources\plugins\mcp\...` it addressed the install tree, where no
+ * boot note has ever been written, and `dev_status` then reported the app down with the sentence "no dev
+ * session has booted here". The rig was reading its own folder and calling it a finding about the app.
+ *
+ * The address now comes from the same place the rig's idea of "which checkout" comes from, so there is
+ * one answer rather than two that agree by coincidence.
  */
-export function bootNoteDir(): string {
-	return join( __dirname, '..', '..', 'starmind', 'scripts', 'dev' );
+export function bootNoteDir(): string | null {
+	return Workspace.devScriptsDir();
 }
 
-/** The note for one port, or the one an app with no fixed port configured leaves behind. */
-export function bootNotePath( key: number | 'ephemeral', dir = bootNoteDir() ): string {
+/** The note for one port, or the one an app with no fixed port configured leaves behind. NO DEFAULT for
+ *  `dir`: there is now a case where there is no directory at all, and a caller has to have decided what
+ *  that means before it can ask for a path inside it. */
+export function bootNotePath( key: number | 'ephemeral', dir: string ): string {
 	return join( dir, `.dev-boot-${ key }.json` );
 }
 
 /** Read one. NEVER THROWS — an unreadable note must degrade the answer, never replace it with an
- *  exception, because an exception here is no answer at all where the old paragraph was a poor one. */
-export function readNote( key: number | 'ephemeral', dir = bootNoteDir() ): NoteRead {
+ *  exception, because an exception here is no answer at all where the old paragraph was a poor one.
+ *  A null `dir` is `unlocated`: no path was looked at, so none is named. */
+export function readNote( key: number | 'ephemeral', dir: string | null = bootNoteDir() ): NoteRead {
+	if ( dir === null ) return { state: 'unlocated' };
 	const path = bootNotePath( key, dir );
 	let text: string;
 	try { text = readFileSync( path, 'utf8' ); }
@@ -129,7 +148,10 @@ export function readNote( key: number | 'ephemeral', dir = bootNoteDir() ): Note
 /** Every note worth looking at for a walk that found nothing: one per port dialled, plus the one an
  *  unconfigured app leaves — because an app on an ephemeral port is exactly the state no fixed address
  *  can find, and refusing to look for its note would leave that state undiagnosable forever. */
-export function readNotes( tried: number[], dir = bootNoteDir() ): NoteRead[] {
+export function readNotes( tried: number[], dir: string | null = bootNoteDir() ): NoteRead[] {
+	// ONE unlocated read, not one per port. "I do not know where to look" is a single fact about the rig;
+	// repeating it per candidate would dress an instrument fault up as a walk that covered ground.
+	if ( dir === null ) return [ { state: 'unlocated' } ];
 	return [ ...tried.map( ( port ) => readNote( port, dir ) ), readNote( 'ephemeral', dir ) ];
 }
 
@@ -163,6 +185,19 @@ export function explain( tried: number[], reads: NoteRead[], reached: AppStamp |
 	const broken = reads.find( ( r ): r is Extract<NoteRead, { state: 'unreadable' }> => r.state === 'unreadable' );
 
 	if ( !found ) {
+		// ── I DO NOT KNOW WHERE TO LOOK. Asked BEFORE the absent branch, because every sentence below it
+		// is a claim about the app and this one is a claim about the rig. `certain: false`, so the caller
+		// still prints the five-cause paragraph: nothing here has narrowed anything down.
+		if ( reads.some( ( r ) => r.state === 'unlocated' ) ) {
+			return { certain: false, cause:
+				'THIS RIG COULD NOT WORK OUT WHICH CHECKOUT TO LOOK IN, so NO boot note was looked for and ' +
+				'nothing below is a finding about the app. A boot note lives at ' +
+				'`<checkout>/starmind/scripts/dev/.dev-boot-<port>.json`, and the checkout is resolved by ' +
+				'`--root` on argv, then STARMIND_DEV_ROOT, then a walk up from this server\'s working ' +
+				'directory looking for a `_Claude/` vault beside a `scripts/` folder — all three missed. ' +
+				'Set STARMIND_DEV_ROOT to the checkout on this server\'s card in Servers & Tools, or export ' +
+				'it when running standalone; the server announces the root it resolved on stderr at startup.' };
+		}
 		if ( broken ) {
 			return { certain: false, cause:
 				`A BOOT NOTE IS THERE AND COULD NOT BE READ: \`${ broken.path }\` ( ${ broken.why } ). That is a ` +
@@ -170,12 +205,19 @@ export function explain( tried: number[], reads: NoteRead[], reached: AppStamp |
 				'one that names every cause rather than picking one. Deleting the file is safe — the app ' +
 				'rewrites it at its next boot.' };
 		}
+		// LOOKED AND FOUND NOTHING — which is only worth saying because the branch above has already
+		// ruled out the other shape of emptiness. Every path looked at is named, so the reader can check
+		// the claim against the checkout they think they are pointing at ( DEFECT-252: the old version of
+		// this sentence was asserted about an INSTALL tree nothing writes notes to ).
 		return { certain: false, cause:
-			`NO BOOT NOTE at ${ reads.map( ( r ) => '`' + r.path + '`' ).join( ', ' ) }. The app writes one at ` +
-			'EVERY boot from a checkout, so an absent note most likely means no dev session has booted here ' +
-			'— the app is not running. That is a finding rather than an error: nothing is missing that ' +
-			'should be there. The one other reading is an app built before the note existed, which needs a ' +
-			'full restart to gain it because main-process code does not hot-reload.' };
+			`NO BOOT NOTE: I LOOKED AT ${ reads.filter( ( r ) => r.state !== 'unlocated' ).map( ( r ) => '`' + r.path + '`' ).join( ', ' ) } ` +
+			'AND FOUND NOTHING THERE. Check those paths are inside the checkout you mean — they are resolved ' +
+			'against the root this server announced on stderr at startup. If they are, the app writes a note ' +
+			'at every boot from a checkout, so an absent one most likely means no dev session has booted ' +
+			'there — the app is not running. That is a finding rather than an error: nothing is missing that ' +
+			'should be there. The two other readings are an app built before the note existed, which needs a ' +
+			'full restart to gain it because main-process code does not hot-reload, and an app running from a ' +
+			'DIFFERENT checkout than the one addressed above.' };
 	}
 
 	const note = found.note;
@@ -242,6 +284,6 @@ export function explain( tried: number[], reads: NoteRead[], reached: AppStamp |
 
 /** The impure half: read the notes for this walk and name one cause. Kept to one line so that everything
  *  worth testing is in `explain`, which needs neither a disk nor an app. */
-export function diagnose( tried: number[], reached: AppStamp | null, dir = bootNoteDir() ): Diagnosis {
+export function diagnose( tried: number[], reached: AppStamp | null, dir: string | null = bootNoteDir() ): Diagnosis {
 	return explain( tried, readNotes( tried, dir ), reached, Date.now() );
 }

@@ -27,7 +27,7 @@ import { fluentTools } from './tools/fluent';
  * ── RUNNING THE SUITES IS NOT HERE ANY MORE ─────────────────────────────────────────────────────
  *
  * `run_suite` and `test_census` stood here until 2026-09-30 and are retired. The test-running
- * capability belongs to `testing_vitest`, in-app, where a run is scoped to a path, checked against
+ * capability belongs to `sm_testing`, in-app, where a run is scoped to a path, checked against
  * an allow-list, and rate-capped — none of which a tool out here could offer. Ruled by Bryan
  * 2026-09-29: they are DROPPED rather than kept beside it, because two doors onto "run the tests"
  * is a fork, and the un-surfaced one drifts while remaining the copy somebody reads.

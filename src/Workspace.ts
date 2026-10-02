@@ -4,14 +4,29 @@ import { dirname, join, resolve } from 'path';
 /**
  * Workspace — which checkout this process is pointed at.
  *
- * ONE FACT AND ONE CALLER, since 2026-09-30. The tools ask a running application, which knows its own
- * project, so none of them needs this — what needs it is `server.ts`, which announces the resolved
- * root on stderr at startup. That announcement is the only report anybody gets of where the walk and
- * `STARMIND_DEV_ROOT` actually landed, and a server pointed at the wrong checkout looks identical
- * from the client's side, so it is worth being fussy about.
+ * ONE FACT. The tools ask a running application, which knows its own project, so none of them needs
+ * this to do its work — what needs it is `server.ts`, which announces the resolved root on stderr at
+ * startup, and `devScriptsDir()` below. That announcement is the only report anybody gets of where the
+ * walk and `STARMIND_DEV_ROOT` actually landed, and a server pointed at the wrong checkout looks
+ * identical from the client's side, so it is worth being fussy about.
+ *
+ * ── THE SECOND CALLER ARRIVED ON 2026-10-01, AND IT ARRIVED AS A DEFECT ( DEFECT-252 ) ──
+ *
+ * `BootNote.bootNoteDir` and `Door.supervisorLogLine` both resolved the app's dev-scripts folder off
+ * `__dirname` with two hops up, each with a doc-block explaining that a `cwd()`-derived path "goes
+ * missing for reasons nobody can see". That reasoning was sound and the conclusion was still wrong: two
+ * hops up from THIS MODULE is the checkout only when the rig is running from the checkout it targets.
+ * Installed — `C:\Program Files\starmind\resources\plugins\mcp\...` — it addressed its own install tree,
+ * where nothing has ever written a boot note, and then reported `app-down` with the confident sentence
+ * "no dev session has booted here". A false negative on the ONE call whose success is the statement
+ * that the app is up.
+ *
+ * So the rule is: ONE ANSWER about which checkout this process targets, resolved here, ANNOUNCED by
+ * `server.ts`, and used by everything that needs a path into it. A reader who wants to know where the
+ * rig looked reads the startup line, and it is the same place.
  *
  * THE CENSUS HALF STOOD HERE UNTIL 2026-09-30 — `subProjects`, `testFiles` and `packageJson`, the
- * inputs `test_census` and `run_suite` read the tree with. Both tools retired to `testing_vitest`
+ * inputs `test_census` and `run_suite` read the tree with. Both tools retired to `sm_testing`
  * ( see `server.ts` ), and these three had no other caller, so they went with them rather than
  * staying as a tree-reading facility nothing reads.
  *
@@ -72,6 +87,24 @@ export class Workspace {
 			if ( up === dir ) return null;
 			dir = up;
 		}
+	}
+
+	/**
+	 * The TARGETED CHECKOUT's `starmind/scripts/dev` — where the app writes its boot notes and where
+	 * `dev-proxied.mjs` writes its supervisor logs. The one address for both, so the two readers cannot
+	 * drift apart or disagree with the root `server.ts` announced.
+	 *
+	 * NULL IS A DIFFERENT FACT FROM AN EMPTY FOLDER, and keeping them apart is the whole of DEFECT-252's
+	 * fourth exit: null is "I do not know which checkout to look in", and a reader that folds it into
+	 * "I looked and found nothing" reports a finding about the APP from a fault in the INSTRUMENT. Both
+	 * callers say which one they mean, in their own words.
+	 *
+	 * Costs no I/O after the first call — `find()` caches, and `server.ts` has already spent it
+	 * announcing the root before any tool runs.
+	 */
+	static devScriptsDir(): string | null {
+		const root = this.find();
+		return root === null ? null : join( root, 'starmind', 'scripts', 'dev' );
 	}
 
 	/** A workspace root carries the vault AND the workspace-level scripts folder. Either alone is

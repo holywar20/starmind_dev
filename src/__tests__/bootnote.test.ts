@@ -203,6 +203,42 @@ describe( 'explain — one cause, named', () => {
 		expect( out.certain ).toBe( false );
 	} );
 
+	// ── DEFECT-252. "I LOOKED AND FOUND NOTHING" AND "I DO NOT KNOW WHERE TO LOOK" ──────────────
+	//
+	// These were ONE answer, and the one they were was the first. The rig resolved the note's folder off
+	// its own module, so installed it addressed `C:\Program Files\...\scripts\dev` — a folder no app has
+	// ever written a note to — and then said "the app writes one at EVERY boot from a checkout, so an
+	// absent note most likely means no dev session has booted here". A false negative on the one call
+	// whose success is the statement that the app is up, dressed as a confident finding.
+	//
+	// The fault was the address, so the fix is an address; these two cases are the fault being kept
+	// VISIBLE afterwards, because the next person to resolve a path in here will be tempted the same way.
+
+	it( 'says it does not know where to look, and claims nothing about the app', () => {
+		const out = explain( [ 51789 ], [ { state: 'unlocated' } ], null, NOW );
+		expect( out.cause ).toContain( 'COULD NOT WORK OUT WHICH CHECKOUT' );
+		expect( out.cause ).toContain( 'nothing below is a finding about the app' );
+		// It must NOT borrow the absent branch's conclusion — that is the whole defect.
+		expect( out.cause ).not.toContain( 'the app is not running' );
+		// No address is named, because none was resolved. A path quoted here is a path somebody checks.
+		expect( out.cause ).not.toContain( 'Program Files' );
+		// Nothing was narrowed down, so the five-cause paragraph still belongs on the reply.
+		expect( out.certain ).toBe( false );
+	} );
+
+	it( 'says WHERE it looked when it looked, so the reader can check the checkout', () => {
+		const out = explain( [ 51789 ], [ absent( 51789 ), absent( 'ephemeral' ) ], null, NOW );
+		expect( out.cause ).toContain( 'I LOOKED AT' );
+		expect( out.cause ).toContain( 'AND FOUND NOTHING THERE' );
+		// The reading the old prose did not offer at all, and the one that was actually true.
+		expect( out.cause ).toContain( 'DIFFERENT checkout' );
+	} );
+
+	it( 'reports one unlocated fact rather than one per port dialled', () => {
+		// Repeating it per candidate would dress an instrument fault up as a walk that covered ground.
+		expect( readNotes( [ 51789, 51790 ], null ) ).toEqual( [ { state: 'unlocated' } ] );
+	} );
+
 	it( 'prefers a note it could read over one it could not', () => {
 		const out = explain( [ 51789 ],
 			[ { state: 'unreadable', path: '/x/a.json', why: 'the note is not JSON' }, read( { door: 'shut', why: 'no switch set', fix: 'x' } ) ],
