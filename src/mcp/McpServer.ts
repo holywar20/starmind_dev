@@ -162,39 +162,59 @@ export class McpServer {
 			return;
 		}
 
-		if ( typeof msg.method !== 'string' ) {
-			if ( msg.id !== undefined ) this.sendError( msg.id, INVALID_REQUEST, 'Invalid request: missing method' );
-			return;
-		}
-
-		// Notifications carry no id and are owed no response (e.g. notifications/initialized).
-		const isNotification = msg.id === undefined;
-
+		// EVERY READ OF `msg` SITS INSIDE A TRY, and that is the whole point of this block's shape.
+		// `null` is valid JSON, and so are `7` and `"x"` — they parse cleanly and then throw on the
+		// FIRST property read. That read used to sit above the try, so one such line escaped
+		// `handleLine` as a rejected promise; `connect` fires this with `void`, and an unhandled
+		// rejection is a process fault under Node's default. The handler that exists to contain a bad
+		// frame has to contain the frame's own SHAPE too, not just its contents.
+		//
+		// TWO TRIES BECAUSE THERE ARE TWO FAILURES, owed two different protocol answers: a frame that
+		// is not a request at all ( INVALID_REQUEST, no id to answer on ), and a handler that failed
+		// inside a request that was well formed ( INVALID_PARAMS, answered on its id ). Folding them
+		// into one catch would make a malformed frame indistinguishable from a bad argument.
+		//
+		// FIXED IN BOTH COPIES BY HAND, 2026-10-04 — see the vendoring note at the top of this file.
+		// The twin is `kcd_sdk/src/server/McpServer.ts`; this is not a divergence.
 		try {
-			switch ( msg.method ) {
-				case 'initialize':
-					this.reply( msg.id!, this.onInitialize( msg.params ) );
-					return;
-
-				case 'tools/list':
-					this.reply( msg.id!, this.onToolsList() );
-					return;
-
-				case 'tools/call':
-					this.reply( msg.id!, await this.onToolsCall( msg.params ) );
-					return;
-
-				case 'ping':
-					this.reply( msg.id!, {} );
-					return;
-
-				default:
-					// Unknown notifications are silently ignored; unknown requests get an error.
-					if ( !isNotification ) this.sendError( msg.id!, METHOD_NOT_FOUND, `Method not found: ${ msg.method }` );
-					return;
+			if ( typeof msg.method !== 'string' ) {
+				if ( msg.id !== undefined ) this.sendError( msg.id, INVALID_REQUEST, 'Invalid request: missing method' );
+				return;
 			}
-		} catch ( e ) {
-			if ( !isNotification ) this.sendError( msg.id!, INVALID_PARAMS, errorText( e ) );
+
+			// Notifications carry no id and are owed no response (e.g. notifications/initialized).
+			const isNotification = msg.id === undefined;
+
+			try {
+				switch ( msg.method ) {
+					case 'initialize':
+						this.reply( msg.id!, this.onInitialize( msg.params ) );
+						return;
+
+					case 'tools/list':
+						this.reply( msg.id!, this.onToolsList() );
+						return;
+
+					case 'tools/call':
+						this.reply( msg.id!, await this.onToolsCall( msg.params ) );
+						return;
+
+					case 'ping':
+						this.reply( msg.id!, {} );
+						return;
+
+					default:
+						// Unknown notifications are silently ignored; unknown requests get an error.
+						if ( !isNotification ) this.sendError( msg.id!, METHOD_NOT_FOUND, `Method not found: ${ msg.method }` );
+						return;
+				}
+			} catch ( e ) {
+				if ( !isNotification ) this.sendError( msg.id!, INVALID_PARAMS, errorText( e ) );
+			}
+		} catch {
+			// REACHED ONLY BY A FRAME THAT IS NOT AN OBJECT — there is no `id` on it to answer against,
+			// so the reply goes out id-less, exactly as the parse error above does.
+			this.sendError( null, INVALID_REQUEST, 'Invalid request: frame is not a JSON-RPC object' );
 		}
 	}
 
