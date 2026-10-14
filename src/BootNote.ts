@@ -287,3 +287,12 @@ export function explain( tried: number[], reads: NoteRead[], reached: AppStamp |
 export function diagnose( tried: number[], reached: AppStamp | null, dir: string | null = bootNoteDir() ): Diagnosis {
 	return explain( tried, readNotes( tried, dir ), reached, Date.now() );
 }
+
+/**
+ * THE ONE BOOT NOTE THIS WALK ACTUALLY READ, if any — exported so a SIBLING note ( the exit note,
+ * `ExitNote.ts` ) can be paired against the same boot without re-deriving the read itself. `explain`
+ * stays untouched: this is additive, and changes no existing behaviour or signature.
+ */
+export function foundNote( tried: number[], dir: string | null = bootNoteDir() ): Extract<NoteRead, { state: 'read' }> | null {
+	return readNotes( tried, dir ).find( ( r ): r is Extract<NoteRead, { state: 'read' }> => r.state === 'read' ) ?? null;
+}

@@ -1,7 +1,8 @@
 import { request as httpRequest } from 'http';
 import { join } from 'path';
 
-import { diagnose } from './BootNote';
+import { diagnose, foundNote, bootNoteDir } from './BootNote';
+import { readExitNote, explainExit } from './ExitNote';
 import { Workspace } from './Workspace';
 
 /**
@@ -589,6 +590,18 @@ export const Door = new class Door {
 	private _appDown( verb: string, tried: number[], opening: string ): DoorReply {
 		const { cause, certain } = diagnose( tried, this._reached );
 
+		// THE EXIT NOTE, LED WITH WHEN THERE IS ONE — the boot note's twin ( TASK-305 ). Paired against
+		// the SAME boot `foundNote` just read, keyed exactly as `DevLane.exitNotePath` keys it: the port
+		// the app ASKED for, not the one it got. `exitLead` is null whenever there is nothing to add —
+		// no boot note at all, no checkout resolved — and the existing `cause` below is untouched either
+		// way: this ADDS a reading, it removes none.
+		const dir   = bootNoteDir();
+		const boot  = foundNote( tried, dir );
+		const exitLead = boot
+			? explainExit( boot.note.at, readExitNote( boot.note.wantedPort > 0 ? boot.note.wantedPort : 'ephemeral', dir ?? '' ), Date.now() )
+			: null;
+		const exitPrefix = exitLead ? `${ exitLead.lead } ` : '';
+
 		// WHERE THE ADDRESS CAME FROM decides which half of this reply is useful. A CONFIGURED port means
 		// somebody's answer is wrong or the app is down, and the fix is a field on a surface. An unconfigured
 		// one means we guessed, and the reader needs to know that before they go looking for a setting that
@@ -611,7 +624,7 @@ export const Door = new class Door {
 			DOOR_SWITCH;
 
 		return { outcome: 'app-down', verb, detail:
-			`${ opening } ${ cause }${ fallback } ${ supervisorLogLine( tried ) } NO VERB RAN, so nothing was tested.` };
+			`${ exitPrefix }${ opening } ${ cause }${ fallback } ${ supervisorLogLine( tried ) } NO VERB RAN, so nothing was tested.` };
 	}
 
 	/**
