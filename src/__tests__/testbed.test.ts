@@ -61,7 +61,6 @@ describe( 'the board a run starts from', () => {
 		expect( ( second[ 'dependencies' ] as { waitsOn: number }[] )[ 0 ].waitsOn ).toBe( first[ 'id' ] );
 		expect( second[ 'order' ] ).toBe( 1 );
 		expect( second[ 'approval' ] ).toBe( 'human' );
-		expect( ( first[ 'proofs' ] as { target: string }[] )[ 0 ].target ).toBe( 'check_3a' );
 	} );
 
 	it( 'starts only the lanes it is told to, and heads every lane with the subject', () => {
@@ -96,14 +95,24 @@ describe( 'the edge-case spellings', () => {
 		expect( Testbed.fill( '\\\\?\\{root}\\sandbox', 'C:\\tb' ) ).toBe( '\\\\?\\C:\\tb\\sandbox' );
 	} );
 
-	it( 'proves a task by every step it names, and by none when it names none', () => {
+	it( 'names a command per step it is proved by, and none when it names none', () => {
 		const m = manifest();
 		m.lanes[ 0 ].tasks![ 0 ].steps = [ '6.m-1', '6.m-2' ];
 		delete m.lanes[ 0 ].tasks![ 1 ].step;
-		const board = Testbed.board( m, 'C:\\tb', 'agent-1', [] ) as { tasks: Record<string, unknown>[] };
 
-		expect( ( board.tasks[ 0 ][ 'proofs' ] as { target: string }[] ).map( ( p ) => p.target ) ).toEqual( [ 'check_6m1', 'check_6m2' ] );
-		expect( board.tasks[ 1 ][ 'proofs' ] ).toEqual( [] );
+		expect( Testbed.stepsOf( m.lanes[ 0 ].tasks![ 0 ] ).map( ( s ) => Testbed.commandFor( s ) ) ).toEqual( [ 'check_6m1', 'check_6m2' ] );
+		expect( Testbed.stepsOf( m.lanes[ 0 ].tasks![ 1 ] ) ).toEqual( [] );
+	} );
+
+	/**
+	 * THE SEEDED BOARD CARRIES NO `proofs`, and this is the regression that matters rather than tidiness:
+	 * the field was deleted from `Task`, the store dropped it silently on the way in, and `report` then read
+	 * `task.proofs.map` off a board that no longer held it and died. Found live on DEFECT-492.
+	 */
+	it( 'writes no proofs array, because the task model no longer has one', () => {
+		const board = Testbed.board( manifest(), 'C:\\tb', 'agent-1', [] ) as { tasks: Record<string, unknown>[] };
+
+		for ( const task of board.tasks ) expect( task ).not.toHaveProperty( 'proofs' );
 	} );
 
 	/** Stamps are epoch milliseconds and 0 is absence, board-wide. A rig writing ISO strings puts a string
@@ -172,9 +181,75 @@ describe( 'the report\'s reading order', () => {
 	} );
 } );
 
+/**
+ * BUG-95's half of the cycle. `up` reads the project's passport, which resolves the project's ROOT and
+ * throws for an id naming no project; `down` never wrote `project_store` at all, so the record was a
+ * precondition nothing created. These cover the row `up` now writes and the two collisions it refuses —
+ * the door calls themselves are not reachable from bare vitest and are proven live on the card's thread.
+ */
+describe( 'the workspace record the bed stands in', () => {
+
+	it( 'writes the manifest\'s id as the id, so no uniquifier can move the bed to another project', () => {
+		const row = Testbed.projectRow( manifest(), 'C:\\Code\\tidepool-testbed' );
+
+		expect( row[ 'id' ] ).toBe( 'tidepool-testbed' );
+		// `project_store.create` derives an id from the NAME and uniquifies it; this writes the id itself.
+		expect( row[ 'name' ] ).toBe( 'tidepool-testbed' );
+		expect( row[ 'root' ] ).toBe( 'C:\\Code\\tidepool-testbed' );
+	} );
+
+	/** `allProjects()` is ordered `last_opened DESC` and boot binds the first row whose root exists, so a
+	 *  stamped bed would quietly become the app's active project — which is `defaultRoot()` for every
+	 *  caller with no subject. */
+	it( 'never stamps the bed as opened', () => {
+		expect( Testbed.projectRow( manifest(), 'C:\\tb' )[ 'last_opened' ] ).toBe( 0 );
+	} );
+
+	it( 'writes exactly the ten columns the upsert knows, so a targeted column cannot be erased', () => {
+		expect( Object.keys( Testbed.projectRow( manifest(), 'C:\\tb' ) ).sort() ).toEqual( [
+			'color', 'created_at', 'doc_root', 'icon', 'id', 'last_opened', 'name', 'plan_root', 'root', 'search_roots'
+		] );
+	} );
+
+	it( 'folds case and resolves both sides, as the app\'s own uniqueness check does', () => {
+		expect( Testbed.samePath( 'C:\\Code\\Tidepool-Testbed', 'c:\\code\\tidepool-testbed' ) ).toBe( true );
+		expect( Testbed.samePath( 'C:\\Code\\tidepool-testbed', 'C:\\Code\\other' ) ).toBe( false );
+	} );
+} );
+
+describe( 'what a project holds', () => {
+
+	const row = { id: 'default', root: 'C:\\starmind_root', name: 'starmind_root', agents: 6, sessions: 6, artifacts: 226 };
+
+	it( 'counts tasks by state and calls an occupied project anything but empty', () => {
+		const board  = { lanes: [ {}, {} ], tasks: [ { state: 'queued' }, { state: 'queued' }, { state: 'verified' } ] };
+		const census = Testbed.census( row, board, [ {}, {} ], 'tidepool-testbed' );
+
+		expect( census ).toMatchObject( { lanes: 2, tasks: 3, plans: 2, artifacts: 226, empty: false, testbed: false } );
+		expect( census[ 'taskStates' ] ).toEqual( { queued: 2, verified: 1 } );
+	} );
+
+	/** The whole point of the field: zero is the only reading that means "safe to experiment in", and it
+	 *  has to be the conjunction of every count rather than a board read on its own. */
+	it( 'is empty only when every count is zero, and a vault alone is enough to occupy it', () => {
+		const bare = { id: 'tidepool-testbed', root: 'C:\\Code\\tidepool-testbed' };
+		expect( Testbed.census( bare, { lanes: [], tasks: [] }, [], 'tidepool-testbed' ) ).toMatchObject( { empty: true, testbed: true } );
+		expect( Testbed.census( { ...bare, artifacts: 1 }, { lanes: [], tasks: [] }, [], null ) ).toMatchObject( { empty: false } );
+	} );
+
+	it( 'surfaces the person\'s standing notice, and marks no project as the bed when there is no bed', () => {
+		const noticed = Testbed.census( { ...row, notice: 'e-mail is being tested through the dev door' }, null, null, null );
+
+		expect( noticed[ 'notice' ] ).toBe( 'e-mail is being tested through the dev door' );
+		expect( noticed[ 'testbed' ] ).toBe( false );
+		// An absent board is not an empty one for anything but the counts it could not see.
+		expect( noticed ).toMatchObject( { lanes: 0, tasks: 0, plans: 0 } );
+	} );
+} );
+
 describe( 'a fence step\'s outcome', () => {
 
-	const task = ( state: string ) => ( { id: 1, order: 0, name: { slug: 'x' }, title: 'x', state, run: 1, assignee: { ref: 'tbit-fences' }, proofs: [] } );
+	const task = ( state: string ) => ( { id: 1, order: 0, name: { slug: 'x' }, title: 'x', state, run: 1, assignee: { ref: 'tbit-fences' } } );
 	const row  = ( kind: string, body: string ) => ( { taskId: 1, kind, author: 'lane', body, detail: '', at: '' } );
 
 	it( 'is not run while the task is queued', () => {

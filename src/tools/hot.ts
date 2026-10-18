@@ -4,7 +4,7 @@ import { Agent, type AgentSummary, type SerializedAgent, type ToolDef } from '@k
 
 import { Door, isOk, unreached, describeApp, type DoorReply } from '../Door';
 import type { ToolDefinition, ToolResult } from '../mcp';
-import { testbedTools } from './testbed';
+import { testbedTools, Testbed, bedProjectId, TESTBED_ROOT } from './testbed';
 import { driveTools } from './drive';
 
 /** How long a wait runs before giving up, and how often it looks. The default sits just under the usual
@@ -115,6 +115,70 @@ async function verb( name: string, tool: string, ...args: unknown[] ): Promise<{
 	const reply = await Door.request( name, ...args );
 	if ( !isOk( reply ) ) return { refusal: refuse( reply, tool ) };
 	return { value: reply.value };
+}
+
+/**
+ * WHAT EACH PROJECT ON THIS APP HOLDS — the orientation half of `dev_status`, and the one it was missing.
+ *
+ * ── THE HAZARD IT CLOSES ────────────────────────────────────────────────────────────────────────
+ *
+ * Every field `dev_status` already carried was about the PROCESS: is it up, is it current, what is the
+ * window showing. None of them said anything about what the app CONTAINS, and this rig's whole purpose is
+ * to write into it. On 2026-10-15 an audit with a broken test bed ran its trials against the dev app's
+ * "default" project — which holds real, non-test work — and the only thing that stopped it being damage was
+ * that the agent thought to read the plan titles and lane names and infer what it was standing in. Nothing
+ * announced it. An agent that did not think to look would have found an ordinary-looking board.
+ *
+ * ── COUNTS, NOT A VERDICT, AND DELIBERATELY NOT A NEW MARKER ────────────────────────────────────
+ *
+ * There is no "live" flag written anywhere and this does not invent one. A convention for marking a project
+ * live is a convention somebody has to maintain, and the project nobody remembered to mark is exactly the
+ * one an agent would then read as safe — the failure mode would be silent and would arrive once. So this
+ * reports what the stores already hold: plans, lanes, tasks by state, agents, sessions, vault artifacts,
+ * and the person's own standing notice, which was readable the whole time with nothing pointing at it.
+ * `empty` is the conjunction of those counts being zero and claims nothing beyond it; `testbed` is read off
+ * the bed's manifest, so the one project that IS disposable says so in its own row.
+ *
+ * ── IT CANNOT MAKE `dev_status` FAIL ────────────────────────────────────────────────────────────
+ *
+ * `dev_status` is the call that answers whether the app is up, and that answer must not depend on a board
+ * read succeeding. A project whose board or plans will not read is reported with `unreadable` beside it and
+ * the rest of the census stands: an unreadable project is itself worth knowing, and folding it into a
+ * refusal would turn the one honest "the app is alive" into a failure about something else entirely.
+ */
+async function projectCensus(): Promise<Record<string, unknown>> {
+	const listed = await Door.pull( 'project_store', 'list', {} );
+	if ( !isOk( listed ) ) {
+		const detail = 'detail' in listed ? listed.detail : '';
+		return { read: false, why: `the project roster did not read [ ${ listed.outcome } ]. ${ detail }`, projects: [] };
+	}
+
+	const bed  = bedProjectId();
+	const rows = ( listed.value ?? [] ) as { id: string; root: string; name?: string }[];
+	const out: Record<string, unknown>[] = [];
+	for ( const row of rows ) {
+		const board = await Door.pull( 'task_store', 'board', { projectId: row.id } );
+		const plans = await Door.pull( 'plan_store', 'list', { projectId: row.id } );
+		if ( !isOk( board ) || !isOk( plans ) ) {
+			out.push( { id: row.id, root: row.root, unreadable: 'its board or its plans would not read, so nothing here says what it holds — treat it as occupied.' } );
+			continue;
+		}
+		out.push( Testbed.census(
+			row,
+			board.value as { lanes?: unknown[]; tasks?: { state?: string }[] } | null,
+			plans.value as unknown[] | null,
+			bed
+		) );
+	}
+
+	return {
+		read:     true,
+		bed:      bed === null
+			? `No test bed manifest was readable at ${ TESTBED_ROOT }, so NO project here is known to be disposable.`
+			: `"${ bed }" is the test bed's project ( ${ TESTBED_ROOT } ) — the only one on this app that is meant to be written to and thrown away.`,
+		counts:   'Facts off the stores, not a live-or-scratch label. `empty` means every count is zero. Anything else is somebody\'s work until you have established otherwise.',
+		projects: out
+	};
 }
 
 /**
@@ -431,8 +495,21 @@ export function hotTools(): ToolDefinition[] {
 		{
 			name:        'dev_status',
 			annotations: { readOnlyHint: true },
-			description: 'Is Starmind actually up — router port, whether the renderer dev server answers, and what each window currently holds. Call this first; it is the only tool whose success proves the app is running.',
+			description: 'Is Starmind actually up — router port, build freshness, what each window holds, and WHAT EACH PROJECT ON IT CONTAINS. Call this first; it is the only tool whose success proves the app is running.',
 			doc:
+				'`workspaces` IS THE FIELD TO READ BEFORE YOU WRITE ANYTHING. Every other field here is about the ' +
+				'PROCESS — up, current, showing. This one is about what the app CONTAINS, per project: plans, ' +
+				'lanes, tasks by state, agents, sessions, vault artifacts, and the person\'s own standing notice. ' +
+				'`empty: true` means every one of those counts is zero. `testbed: true` marks the one project the ' +
+				'test bed manifest names, which is the only project on this app meant to be written to and thrown ' +
+				'away — `testbed_up` builds it and `testbed_down` wipes it.\n\n' +
+				'THESE ARE COUNTS AND NOT A VERDICT, and there is deliberately no live-or-scratch marker to read. ' +
+				'A project that is not empty and not the test bed is SOMEBODY\'S WORK until you have established ' +
+				'otherwise — the dev app\'s "default" project holds real plans and real lanes, and it looks like ' +
+				'an ordinary board. On 2026-10-15 an audit ran its trials there because the test bed was broken ' +
+				'and nothing announced what it was standing in; the only thing between that and real damage was ' +
+				'one agent thinking to read the plan titles. Read this field instead of inferring it. A project ' +
+				'whose board would not read is reported `unreadable` and is to be treated as occupied.\n\n' +
 				'THE ORIENTATION CALL FOR THE HOT HALF, and its role grew when this server moved out of the app. ' +
 				'It used to be the check to run after a restart. It is now the check to run BEFORE anything, ' +
 				'because a standalone server answers whether or not Starmind exists — a reply from any other ' +
@@ -506,7 +583,9 @@ export function hotTools(): ToolDefinition[] {
 				// the orientation call, so which process answered is part of the ANSWER rather than a note
 				// beside it — and it is the one reply somebody might store, quote or diff, where a second
 				// content block is the half that gets dropped on the way.
-				return ok( { reachedApp: true, door: Door.url, app: Door.reached, ...status } );
+				// WHAT THE APP CONTAINS, beside what the app IS. See `projectCensus` — it cannot refuse this
+				// call, and a project it could not read says so in its own row rather than taking the reply down.
+				return ok( { reachedApp: true, door: Door.url, app: Door.reached, ...status, workspaces: await projectCensus() } );
 			}
 		},
 
